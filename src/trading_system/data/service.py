@@ -15,6 +15,7 @@ def run_data_pull(
     *,
     as_of: date,
     run_at: datetime | None = None,
+    include_benchmark: bool = True,
 ) -> DataRunMeta:
     """Execute a data pull for ``as_of`` using ``provider`` and persist artifacts."""
 
@@ -25,7 +26,7 @@ def run_data_pull(
 
     benchmark_frame = None
     benchmark_symbol: str | None = None
-    if config.risk.market_filter is not None:
+    if include_benchmark and config.risk.market_filter is not None:
         benchmark_symbol = config.risk.market_filter.benchmark
         if benchmark_symbol:
             try:
@@ -34,6 +35,8 @@ def run_data_pull(
                 )
             except NotImplementedError:
                 benchmark_frame = None
+    elif not include_benchmark:
+        benchmark_symbol = None
 
     writer = RawDataWriter(config.paths.data_raw)
     result = writer.persist(

@@ -96,6 +96,16 @@ class PathsConfig(BaseModel):
         return (self.data_raw, self.data_curated, self.reports)
 
 
+class PreprocessConfig(BaseModel):
+    """Preprocessing policy for curated datasets."""
+
+    model_config = ConfigDict(extra="allow")
+
+    forward_fill_limit: int = 1
+    rolling_peak_window: int = 252
+    calendar_frequency: str = "B"
+
+
 class Config(BaseModel):
     """Top-level configuration contract for the trading system."""
 
@@ -110,6 +120,7 @@ class Config(BaseModel):
     rebalance: RebalanceConfig
     notify: NotifyConfig
     paths: PathsConfig
+    preprocess: PreprocessConfig | None = None
 
 
 def _resolve_directories(
@@ -167,5 +178,6 @@ __all__ = [
     "RebalanceConfig",
     "NotifyConfig",
     "PathsConfig",
+    "PreprocessConfig",
     "load_config",
 ]

@@ -35,6 +35,9 @@ rebalance:
   cash_buffer: 0.05
 notify:
   email: ops@example.com
+preprocess:
+  forward_fill_limit: 2
+  rolling_peak_window: 126
 paths:
   data_raw: data/raw
   data_curated: data/curated
@@ -63,6 +66,10 @@ def test_load_config_creates_directories(tmp_path: Path) -> None:
     assert config.paths.data_raw == expected_raw
     assert config.paths.data_curated == expected_curated
     assert config.paths.reports == expected_reports
+
+    assert config.preprocess is not None
+    assert config.preprocess.forward_fill_limit == 2
+    assert config.preprocess.rolling_peak_window == 126
 
     for directory in config.paths.directories:
         assert directory.is_dir()
