@@ -1,0 +1,55 @@
+[tool.poetry]
+name = "trading-system"
+version = "0.1.0"
+description = "Research and alerting toolkit for a mid/long-horizon trading strategy."
+authors = ["Quant Team <quant@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "trading_system", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+numpy = "^1.26"
+pandas = "^2.2"
+pyarrow = "^17.0"
+matplotlib = "^3.9"
+plotly = "^5.23"
+pydantic = "^2.8"
+typer = { version = "^0.12.3", extras = ["all"] }
+rich = "^13.7"
+pytest = "^8.3"
+click = "<8.2"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4"
+ruff = "^0.6"
+mypy = "^1.10"
+pytest-cov = "^5.0"
+
+[tool.poetry.scripts]
+ts = "trading_system.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
