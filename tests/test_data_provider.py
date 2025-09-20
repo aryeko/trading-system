@@ -194,6 +194,29 @@ class StubProvider(DataProvider):
         return self._benchmark
 
 
+def test_run_data_pull_can_skip_benchmark(tmp_path: Path) -> None:
+    config_path = write_config(tmp_path, SAMPLE_CONFIG)
+    config = load_config(config_path)
+
+    bars = pd.concat([build_frame("AAPL"), build_frame("MSFT")], ignore_index=True)
+    benchmark = build_frame("SPY")
+
+    provider = StubProvider(bars=bars, benchmark=benchmark)
+    as_of = date(2024, 5, 2)
+
+    result = run_data_pull(
+        config,
+        provider,
+        as_of=as_of,
+        include_benchmark=False,
+    )
+
+    assert provider.benchmark_requests == []
+    assert result.benchmark is None
+    meta_payload = json.loads((result.directory / "meta_run.json").read_text("utf-8"))
+    assert "benchmark" not in meta_payload
+
+
 def test_run_data_pull_writes_artifacts(tmp_path: Path) -> None:
     config_path = write_config(tmp_path, SAMPLE_CONFIG)
     config = load_config(config_path)
