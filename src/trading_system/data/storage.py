@@ -6,7 +6,7 @@ import json
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +63,7 @@ class RawDataWriter:
             benchmark_path = run_directory / f"benchmark_{benchmark_symbol}.parquet"
             _write_parquet_atomic(normalized_benchmark, benchmark_path)
 
-        run_timestamp = run_at or datetime.combine(as_of, time.min, tzinfo=timezone.utc)
+        run_timestamp = run_at or datetime.combine(as_of, time.min, tzinfo=UTC)
 
         last_bar = None
         date_series = normalized_bars.get("date")

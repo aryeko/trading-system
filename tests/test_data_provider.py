@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -203,7 +203,7 @@ def test_run_data_pull_writes_artifacts(tmp_path: Path) -> None:
 
     provider = StubProvider(bars=bars, benchmark=benchmark)
     as_of = date(2024, 5, 2)
-    run_timestamp = datetime(2024, 5, 2, tzinfo=timezone.utc)
+    run_timestamp = datetime(2024, 5, 2, tzinfo=UTC)
 
     result = run_data_pull(
         config,
@@ -216,6 +216,7 @@ def test_run_data_pull_writes_artifacts(tmp_path: Path) -> None:
     assert provider.bar_requests == [
         (tuple(config.universe.tickers), expected_start, as_of)
     ]
+    assert config.risk.market_filter is not None
     assert provider.benchmark_requests == [
         (config.risk.market_filter.benchmark, expected_start, as_of)
     ]
