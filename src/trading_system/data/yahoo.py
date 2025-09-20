@@ -77,10 +77,11 @@ class YahooDataProvider(DataProvider):
         end: date | datetime,
     ) -> pd.DataFrame:
         history = self._download_history(symbol, start=start, end=end)
-        if history.empty:
+        history_prepared = self._prepare_history(symbol, history)
+        if history_prepared.empty:
             raise DataUnavailableError(symbol)
 
-        frame = history.reset_index(names="Date")
+        frame = history_prepared.reset_index(names="Date")
 
         expected_columns = {
             "Date": "date",
@@ -117,7 +118,7 @@ class YahooDataProvider(DataProvider):
         yf_end = _to_datetime(end) + timedelta(days=1)
 
         try:
-            history_raw = yf.download(
+            history_raw: pd.DataFrame | pd.Series = yf.download(
                 symbol,
                 start=yf_start,
                 end=yf_end,
@@ -126,15 +127,53 @@ class YahooDataProvider(DataProvider):
                 progress=False,
                 actions=True,
             )
-            history = cast(pd.DataFrame, history_raw)
         except Exception as exc:  # pragma: no cover - network error surface
             raise DataUnavailableError(symbol, message=str(exc)) from exc
 
-        # yfinance may return a Series when a single column is requested; ensure DataFrame.
-        if isinstance(history, pd.Series):
-            history = history.to_frame().T
+        if isinstance(history_raw, pd.Series):
+            return history_raw.to_frame().T
+        if isinstance(history_raw, pd.DataFrame):
+            return history_raw
 
-        return history
+        return pd.DataFrame(history_raw)
+
+    def _prepare_history(self, symbol: str, history: pd.DataFrame) -> pd.DataFrame:
+        if history.empty:
+            return history
+
+        columns = history.columns
+        if isinstance(columns, pd.MultiIndex):
+            try:
+                history = cast(pd.DataFrame, history.xs(symbol, axis=1, level=-1))
+            except (KeyError, ValueError):
+                history = history.droplevel(-1, axis=1)
+
+        columns = history.columns
+        if isinstance(columns, pd.MultiIndex):
+            history.columns = [
+                " ".join(str(part) for part in col).strip() for col in columns
+            ]
+
+        history = history.copy()
+        history.columns.name = None
+        for unwanted in ("Dividends", "Stock Splits"):
+            if unwanted in history.columns:
+                history.drop(columns=unwanted, inplace=True)
+
+        # Ensure index has a name for reset_index later
+        if history.index.name is None:
+            history.index.name = "Date"
+
+        column_order = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+        # Guarantee all expected columns exist before downstream mapping
+        missing = [name for name in column_order if name not in history.columns]
+        if missing:
+            raise DataUnavailableError(
+                symbol,
+                message=f"Missing expected columns after normalization: {missing}",
+            )
+
+        return history.loc[:, column_order]
 
 
 def _to_datetime(value: date | datetime) -> datetime:
