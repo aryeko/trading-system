@@ -1,5 +1,6 @@
 """Tests for the trading system CLI."""
 
+import pytest
 from typer.testing import CliRunner
 
 from trading_system import __version__
@@ -19,3 +20,14 @@ def test_version_command_outputs_package_version() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert __version__ in result.stdout
+
+
+def test_doctor_command_honors_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TS_DOCTOR_REQUIRED", "python")
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "python" in result.stdout
