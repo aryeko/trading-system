@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
-from typing import Any, Mapping, MutableMapping
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict
