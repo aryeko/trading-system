@@ -63,14 +63,6 @@ def write_config(tmp_path: Path, text: str) -> Path:
     return config_path
 
 
-def sample_bars(symbol: str) -> str:
-    return (
-        "Date,Open,High,Low,Close,Adj Close,Volume\n"
-        "2024-05-01,100,110,95,108,108,12345\n"
-        "2024-05-02,109,112,107,111,111,15000\n"
-    )
-
-
 def build_frame(symbol: str) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -86,12 +78,29 @@ def build_frame(symbol: str) -> pd.DataFrame:
     )
 
 
-def test_yahoo_provider_parses_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+def _history_frame(symbol: str) -> pd.DataFrame:
+    dates = pd.to_datetime(["2024-05-01", "2024-05-02"])
+    data = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [101.0, 102.0],
+            "Low": [99.0, 100.0],
+            "Close": [100.5, 101.5],
+            "Adj Close": [100.4, 101.4],
+            "Volume": [12345, 15000],
+        },
+        index=dates,
+    )
+    data.index.name = "Date"
+    return data
+
+
+def test_yahoo_provider_parses_history(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = YahooDataProvider()
     monkeypatch.setattr(
         provider,
-        "_download_csv",
-        lambda symbol, start, end: sample_bars(symbol),
+        "_download_history",
+        lambda symbol, start, end: _history_frame(symbol),
         raising=False,
     )
 
@@ -108,12 +117,12 @@ def test_yahoo_provider_skips_missing_symbols(
 ) -> None:
     provider = YahooDataProvider()
 
-    def fake_download(symbol: str, start: date, end: date) -> str:
+    def fake_download(symbol: str, start: date, end: date) -> pd.DataFrame:
         if symbol == "MSFT":
             raise DataUnavailableError(symbol)
-        return sample_bars(symbol)
+        return _history_frame(symbol)
 
-    monkeypatch.setattr(provider, "_download_csv", fake_download, raising=False)
+    monkeypatch.setattr(provider, "_download_history", fake_download, raising=False)
 
     with caplog.at_level("WARNING"):
         bars = provider.get_bars(
