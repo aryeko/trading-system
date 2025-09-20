@@ -36,13 +36,13 @@ def format_code() -> None:
 def typecheck() -> None:
     """Execute mypy type checks."""
 
-    _invoke(("mypy", "src"))
+    _invoke(("mypy", "src", "tests"))
 
 
 def tests() -> None:
     """Run the pytest suite."""
 
-    _invoke(("pytest",))
+    _invoke(("pytest", "--cov"))
 
 
 def ci() -> None:
