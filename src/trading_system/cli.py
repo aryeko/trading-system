@@ -16,6 +16,7 @@ from rich.table import Table
 from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
+from trading_system.preprocess import Preprocessor, PreprocessResult
 
 app = typer.Typer(help="Utilities for research, reporting, and operations.")
 config_app = typer.Typer(help="Configuration management commands.")
@@ -99,6 +100,14 @@ def _resolve_provider(name: str) -> DataProvider:
     return factory()
 
 
+def _parse_as_of(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Invalid as-of date:[/] {value}")
+        raise typer.Exit(code=1) from exc
+
+
 @app.command()
 def doctor() -> None:
     """Verify required tooling and environment prerequisites."""
@@ -170,11 +179,7 @@ def data_pull(
     provider_name = provider or config.data.provider
     provider_instance = _resolve_provider(provider_name)
 
-    try:
-        as_of_date = date.fromisoformat(as_of)
-    except ValueError as exc:
-        console.print(f"[red]Invalid as-of date:[/] {as_of}")
-        raise typer.Exit(code=1) from exc
+    as_of_date = _parse_as_of(as_of)
 
     console.print(
         f"Pulling data for [bold]{as_of_date}[/bold] via provider [bold]{provider_name}[/bold]"
@@ -269,6 +274,76 @@ def data_inspect(
         console.print(file_table)
     else:
         console.print("[yellow]No parquet files found for this run.[/yellow]")
+
+
+@data_app.command("preprocess")
+def data_preprocess(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
+        ..., help="As-of date for preprocessing (YYYY-MM-DD)."
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Validate inputs without writing outputs."
+    ),
+    force: bool = typer.Option(
+        False, help="Overwrite curated outputs if they already exist."
+    ),
+) -> None:
+    """Run the preprocessing pipeline for a given as-of date."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    raw_dir = config.paths.data_raw / as_of_date.isoformat()
+    curated_dir = config.paths.data_curated / as_of_date.isoformat()
+
+    if not raw_dir.is_dir():
+        console.print(f"[red]Raw data directory not found:[/] {raw_dir}")
+        raise typer.Exit(code=1)
+
+    if dry_run:
+        files = sorted(raw_dir.glob("*.parquet"))
+        console.print(f"Preprocess dry-run for [bold]{as_of_date}[/bold]")
+        if files:
+            table = Table("raw file")
+            for file_path in files:
+                table.add_row(file_path.name)
+            console.print(table)
+        else:
+            console.print("[yellow]No parquet files located in raw directory.[/yellow]")
+        return
+
+    if curated_dir.exists() and not force and any(curated_dir.iterdir()):
+        console.print(
+            f"[red]Curated directory already populated:[/] {curated_dir}. Use --force to overwrite."
+        )
+        raise typer.Exit(code=1)
+
+    preprocessor = Preprocessor(config)
+    result = preprocessor.run(as_of_date)
+    _print_preprocess_summary(result)
+
+
+def _print_preprocess_summary(result: PreprocessResult) -> None:
+    console.print(
+        f"[green]Preprocessed symbols for[/green] {result.as_of}: {', '.join(result.symbols) or 'none'}"
+    )
+    if not result.artifacts:
+        console.print("[yellow]No curated artifacts were produced.[/yellow]")
+        return
+    table = Table("symbol", "artifact")
+    for symbol in result.symbols:
+        path = result.artifacts.get(symbol)
+        table.add_row(symbol, str(path) if path else "—")
+    console.print(table)
 
 
 @config_app.command("inspect")

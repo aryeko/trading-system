@@ -15,6 +15,41 @@ from trading_system.data.provider import DataProvider
 
 runner = CliRunner()
 
+PREPROCESS_CONFIG = """
+base_ccy: USD
+calendar: NYSE
+data:
+  provider: yahoo
+  lookback_days: 1
+universe:
+  tickers: [AAPL]
+strategy:
+  type: trend_follow
+  entry: "close > sma_100"
+  exit: "close < sma_100"
+risk:
+  crash_threshold_pct: -0.08
+  drawdown_threshold_pct: -0.20
+rebalance:
+  cadence: monthly
+  max_positions: 5
+notify:
+  email: ops@example.com
+paths:
+  data_raw: data/raw
+  data_curated: data/curated
+  reports: reports
+preprocess:
+  forward_fill_limit: 1
+  rolling_peak_window: 5
+"""
+
+
+def _write_preprocess_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(PREPROCESS_CONFIG, encoding="utf-8")
+    return config_path
+
 
 def test_cli_help_lists_commands() -> None:
     result = runner.invoke(app, ["--help"])
@@ -221,3 +256,75 @@ def test_data_inspect_summarizes_run(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "AAPL" in result.stdout
     assert "timestamp" in result.stdout
+
+
+def test_data_preprocess_dry_run_lists_symbols(tmp_path: Path) -> None:
+    config_path = _write_preprocess_config(tmp_path)
+    run_dir = config_path.parent / "data" / "raw" / "2024-05-02"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-05-01", "2024-05-02"]),
+            "symbol": ["AAPL", "AAPL"],
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [100.5, 101.5],
+            "adj_close": [100.5, 101.5],
+            "volume": [1_000, 1_100],
+        }
+    ).to_parquet(run_dir / "AAPL.parquet", index=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "preprocess",
+            "--config",
+            str(config_path),
+            "--as-of",
+            "2024-05-02",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "AAPL.parquet" in result.stdout
+
+
+def test_data_preprocess_writes_curated_outputs(tmp_path: Path) -> None:
+    config_path = _write_preprocess_config(tmp_path)
+    run_dir = config_path.parent / "data" / "raw" / "2024-05-02"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-05-01", "2024-05-02"]),
+            "symbol": ["AAPL", "AAPL"],
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [100.5, 101.5],
+            "adj_close": [100.5, 101.5],
+            "volume": [1_000, 1_100],
+        }
+    ).to_parquet(run_dir / "AAPL.parquet", index=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "data",
+            "preprocess",
+            "--config",
+            str(config_path),
+            "--as-of",
+            "2024-05-02",
+        ],
+    )
+
+    curated_path = (
+        config_path.parent / "data" / "curated" / "2024-05-02" / "AAPL.parquet"
+    )
+    assert result.exit_code == 0
+    assert curated_path.exists()
