@@ -8,6 +8,9 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      POETRY_VIRTUALENVS_CREATE: "true"
 
     steps:
       - name: Check out repository
@@ -16,25 +19,30 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Install Poetry
-        run: pipx install poetry==2.1.4
+        uses: abatilo/actions-poetry@v3
+        with:
+          poetry-version: "2.1.4"
 
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+      - name: Cache virtualenv
+        id: cache-venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: poetry install --no-interaction --no-ansi
 
-      - name: Run Ruff
-        run: poetry run ruff check .
+      - name: Lint
+        run: poetry run lint
 
-      - name: Run Black
-        run: poetry run black --check src tests
+      - name: Type check
+        run: poetry run typecheck
 
-      - name: Run Mypy
-        run: poetry run mypy src tests
-
-      - name: Run Pytest
-        run: poetry run pytest --cov
+      - name: Tests
+        run: poetry run tests
