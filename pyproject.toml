@@ -15,6 +15,7 @@ pyarrow = "^17.0"
 matplotlib = "^3.9"
 plotly = "^5.23"
 pydantic = "^2.8"
+pyyaml = "^6.0"
 typer = { version = "^0.12.3", extras = ["all"] }
 rich = "^13.7"
 pytest = "^8.3"
@@ -25,6 +26,7 @@ black = "^24.4"
 ruff = "^0.6"
 mypy = "^1.10"
 pytest-cov = "^5.0"
+types-pyyaml = "^6.0"
 
 [tool.poetry.scripts]
 ts = "trading_system.cli:main"
