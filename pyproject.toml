@@ -21,7 +21,10 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{ include = "trading_system", from = "src" }]
+packages = [
+    { include = "trading_system", from = "src" },
+    { include = "scripts" },
+]
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4"
@@ -32,6 +35,11 @@ types-pyyaml = "^6.0"
 
 [project.scripts]
 ts = "trading_system.cli:main"
+lint = "scripts.tooling:lint"
+fmt = "scripts.tooling:format_code"
+typecheck = "scripts.tooling:typecheck"
+tests = "scripts.tooling:tests"
+ci = "scripts.tooling:ci"
 
 [build-system]
 requires = ["poetry-core>=1.8.0"]

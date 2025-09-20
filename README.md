@@ -36,8 +36,18 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
    ```
 4. Execute the automated tests:
    ```bash
-   poetry run pytest
+   poetry run tests
    ```
+
+### Handy Automation Commands
+
+All local automation lives under Poetry scripts:
+
+- `poetry run lint` — Ruff lint + Black check
+- `poetry run fmt` — apply Black formatting
+- `poetry run typecheck` — mypy static analysis
+- `poetry run tests` — pytest suite
+- `poetry run ci` — run lint, typecheck, and tests sequentially
 
 ## Tooling
 
