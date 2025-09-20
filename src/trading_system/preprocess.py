@@ -11,27 +11,13 @@ import numpy as np
 import pandas as pd
 
 from trading_system.config import Config, PreprocessConfig
+from trading_system.data import BARS_COLUMN_ORDER, ensure_bars_frame
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_RAW_COLUMNS: tuple[str, ...] = (
-    "date",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-)
+REQUIRED_RAW_COLUMNS: tuple[str, ...] = BARS_COLUMN_ORDER
 
-CANONICAL_COLUMNS: list[str] = [
-    "date",
-    "symbol",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "adj_close",
+CANONICAL_COLUMNS: list[str] = list(BARS_COLUMN_ORDER) + [
     "sma_100",
     "sma_200",
     "ret_1d",
@@ -92,15 +78,19 @@ class Preprocessor:
         )
 
     def _validate_raw_columns(self, frame: pd.DataFrame, symbol: str) -> None:
-        missing = [column for column in REQUIRED_RAW_COLUMNS if column not in frame.columns]
+        missing = [
+            column for column in REQUIRED_RAW_COLUMNS if column not in frame.columns
+        ]
         if missing:
             missing_list = ", ".join(missing)
-            raise ValueError(f"Raw data for {symbol} missing required columns: {missing_list}")
+            raise ValueError(
+                f"Raw data for {symbol} missing required columns: {missing_list}"
+            )
 
     def _curate_frame(
         self, frame: pd.DataFrame, symbol: str, as_of: pd.Timestamp
     ) -> pd.DataFrame:
-        data = frame.copy()
+        data = ensure_bars_frame(frame)
         data["date"] = pd.to_datetime(data["date"], utc=False)
         data = data.sort_values("date")
 
@@ -208,4 +198,3 @@ def _infer_symbol(path: Path, frame: pd.DataFrame) -> str:
 
 
 __all__ = ["Preprocessor", "PreprocessResult"]
-

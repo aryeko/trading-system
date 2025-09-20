@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from trading_system.config import load_config
-from trading_system.preprocess import Preprocessor, PreprocessResult
+from trading_system.preprocess import CANONICAL_COLUMNS, Preprocessor, PreprocessResult
 
 CONFIG_TEMPLATE = """
 base_ccy: USD
@@ -99,22 +99,7 @@ def test_preprocessor_curates_and_derives_features(tmp_path: Path) -> None:
 
     curated = pd.read_parquet(result.artifacts["AAPL"])
 
-    expected_columns = [
-        "date",
-        "symbol",
-        "open",
-        "high",
-        "low",
-        "close",
-        "volume",
-        "adj_close",
-        "sma_100",
-        "sma_200",
-        "ret_1d",
-        "ret_20d",
-        "rolling_peak",
-    ]
-    assert list(curated.columns) == expected_columns
+    assert list(curated.columns) == CANONICAL_COLUMNS
     assert len(curated) == len(calendar)
 
     gap_row = curated.loc[curated["date"] == missing_date]
@@ -140,7 +125,9 @@ def test_preprocessor_curates_and_derives_features(tmp_path: Path) -> None:
     assert last_row["rolling_peak"] == pytest.approx(expected_peak)
 
 
-def test_preprocessor_logs_when_gap_exceeds_limit(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_preprocessor_logs_when_gap_exceeds_limit(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Gaps beyond the forward-fill tolerance emit a warning."""
 
     preprocessor, raw_base, curated_base = load_test_config(
@@ -172,9 +159,13 @@ def test_preprocessor_logs_when_gap_exceeds_limit(tmp_path: Path, caplog: pytest
     with caplog.at_level(logging.WARNING):
         preprocessor.run(as_of)
 
-    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    warnings = [
+        record.message for record in caplog.records if record.levelno == logging.WARNING
+    ]
     assert any("Missing close data for AAPL" in message for message in warnings)
 
-    curated = pd.read_parquet(curated_base / as_of.strftime("%Y-%m-%d") / "AAPL.parquet")
+    curated = pd.read_parquet(
+        curated_base / as_of.strftime("%Y-%m-%d") / "AAPL.parquet"
+    )
     missing_rows = curated["close"].isna()
     assert missing_rows.sum() == 2
