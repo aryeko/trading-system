@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*.DS_Store
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+
+# Data directories
+data/*
+!data/.gitkeep
+!data/raw/
+!data/curated/
+data/raw/*
+!data/raw/.gitkeep
+data/curated/*
+!data/curated/.gitkeep
+
+# Reports directory
+reports/*
+!reports/.gitkeep
+
+# VSCode
+.vscode/
