@@ -8,6 +8,9 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      POETRY_VIRTUALENVS_CREATE: "true"
 
     steps:
       - name: Check out repository
@@ -17,12 +20,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+          cache: "poetry"
 
       - name: Install Poetry
-        run: pipx install poetry==2.1.4
-
-      - name: Configure Poetry
-        run: poetry config virtualenvs.in-project true
+        uses: abatilo/actions-poetry@v3
+        with:
+          poetry-version: "2.1.4"
 
       - name: Cache virtualenv
         id: cache-venv
