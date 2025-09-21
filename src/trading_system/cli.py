@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import date
 from numbers import Real
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import typer
@@ -25,6 +26,13 @@ from trading_system.notify import (
     NotificationStatus,
     load_report_summary,
 )
+from trading_system.orchestrator import (
+    PipelineExecutionError,
+    PipelineSummary,
+    pipeline_logging,
+    run_daily_pipeline,
+    run_rebalance_pipeline,
+)
 from trading_system.preprocess import Preprocessor, PreprocessResult
 from trading_system.rebalance import RebalanceEngine, RebalanceResult
 from trading_system.report import ReportBuilder, ReportResult
@@ -39,6 +47,8 @@ rebalance_app = typer.Typer(help="Rebalance proposal commands.")
 report_app = typer.Typer(help="Daily report generation commands.")
 risk_app = typer.Typer(help="Risk evaluation commands.")
 notify_app = typer.Typer(help="Notification delivery commands.")
+backtest_app = typer.Typer(help="Backtesting commands (S-11 placeholder).")
+run_app = typer.Typer(help="Pipeline orchestration commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
@@ -46,6 +56,8 @@ app.add_typer(rebalance_app, name="rebalance")
 app.add_typer(report_app, name="report")
 app.add_typer(risk_app, name="risk")
 app.add_typer(notify_app, name="notify")
+app.add_typer(backtest_app, name="backtest")
+app.add_typer(run_app, name="run")
 console = Console()
 
 _DEFAULT_DOCTOR_TOOLS: tuple[str, ...] = (
@@ -68,6 +80,141 @@ _PROVIDER_DESCRIPTIONS: dict[str, str] = {
     "eodhd": "EOD Historical Data (adapter planned)",
 }
 
+_PIPELINE_STEPS: tuple[tuple[str, str, str], ...] = (
+    (
+        "data pull",
+        "Fetch raw OHLCV data for the configured universe",
+        "data/raw/<asof>/*.parquet",
+    ),
+    (
+        "data preprocess",
+        "Derive indicators and curated datasets",
+        "data/curated/<asof>/*.parquet",
+    ),
+    (
+        "signals build",
+        "Evaluate strategy rules and write signals parquet",
+        "reports/<asof>/signals.parquet",
+    ),
+    (
+        "risk evaluate",
+        "Compute crash/drawdown alerts and market filter",
+        "reports/<asof>/risk_alerts.json",
+    ),
+    (
+        "rebalance propose",
+        "Generate target weights and draft orders",
+        "reports/<asof>/rebalance_proposal.json",
+    ),
+    (
+        "report build",
+        "Render the operator report payloads",
+        "reports/<asof>/daily_report.{json,html,pdf}",
+    ),
+    (
+        "notify send",
+        "Deliver report summaries to configured channels",
+        "email/slack dispatch (no artifact)",
+    ),
+    (
+        "backtest run",
+        "Historical simulation of the strategy (story S-11)",
+        "reports/backtests/<run>/",
+    ),
+)
+
+
+def _config_option() -> Any:
+    return typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        envvar="TS_CONFIG_PATH",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load (overridable via TS_CONFIG_PATH).",
+    )
+
+
+def _asof_option(help_text: str) -> Any:
+    return typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--asof",
+        help=help_text,
+        envvar="TS_ASOF",
+    )
+
+
+def _holdings_option() -> Any:
+    return typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        envvar="TS_HOLDINGS_PATH",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON (overridable via TS_HOLDINGS_PATH).",
+    )
+
+
+def _dry_run_flag(help_text: str) -> Any:
+    return typer.Option(False, "--dry-run", help=help_text)
+
+
+def _force_flag(help_text: str) -> Any:
+    return typer.Option(False, "--force", help=help_text)
+
+
+def _channel_option(default: str = "all") -> Any:
+    return typer.Option(
+        default,
+        "--channel",
+        help="Notification channel(s) to target (email|slack|all or comma separated).",
+    )
+
+
+def _log_toggle() -> Any:
+    return typer.Option(True, help="Write pipeline logs to reports/<asof>/run.log.")
+
+
+def _resolve_log_path(config: Config, as_of_date: date, enabled: bool) -> Path | None:
+    if not enabled:
+        return None
+    reports_dir = config.paths.reports / as_of_date.strftime("%Y-%m-%d")
+    return reports_dir / "run.log"
+
+
+def _print_pipeline_summary(summary: PipelineSummary | None) -> None:
+    if summary is None:
+        return
+
+    state = "[green]SUCCESS[/green]" if summary.success else "[red]FAILED[/red]"
+    console.print(
+        f"{state} pipeline for [bold]{summary.as_of}[/bold] in {summary.duration:.2f}s"
+    )
+
+    if summary.steps:
+        table = Table("step", "status", "duration", "details")
+        for record in summary.steps:
+            step_label = record.name.replace("_", " ")
+            table.add_row(
+                step_label,
+                record.status,
+                f"{record.duration:.2f}s",
+                record.details or "—",
+            )
+        console.print(table)
+
+    if summary.manifest:
+        manifest_table = Table("artifact", "location")
+        for key, value in sorted(summary.manifest.items()):
+            manifest_table.add_row(key, value or "—")
+        console.print("Manifest:")
+        console.print(manifest_table)
+
 
 @app.command()
 def version() -> None:
@@ -85,6 +232,16 @@ def info() -> None:
     console.print(
         "Mid/long-horizon trading workflow with daily risk alerts and periodic rebalances."
     )
+
+
+@app.command("steps")
+def steps() -> None:
+    """List orchestrated pipeline steps and their primary artifacts."""
+
+    table = Table("command", "description", "artifacts")
+    for command, description, artifacts in _PIPELINE_STEPS:
+        table.add_row(command, description, artifacts)
+    console.print(table)
 
 
 def _tools_to_check() -> tuple[str, ...]:
@@ -544,6 +701,123 @@ def notify_preview(
         raise typer.Exit(code=1)
 
 
+@run_app.command("daily")
+def run_daily(
+    config_path: Path = _config_option(),  # noqa: B008 - Typer option factory
+    holdings_path: Path = _holdings_option(),  # noqa: B008 - Typer option factory
+    as_of: str = _asof_option("As-of date for the daily pipeline (YYYY-MM-DD)."),
+    dry_run: bool = _dry_run_flag(
+        "Skip actual notification delivery while still generating artifacts."
+    ),
+    force: bool = _force_flag(
+        "Overwrite curated/report artifacts and ignore cadence checks."
+    ),
+    channel: str = _channel_option(),  # noqa: B008 - Typer option factory
+    log_to_file: bool = _log_toggle(),  # noqa: B008 - Typer option factory
+) -> None:
+    """Run the daily workflow (pull → preprocess → risk → report → notify)."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    provider = _resolve_provider(config.data.provider)
+    holdings = load_holdings(holdings_path)
+    channels = _notify_channels(channel)
+    log_path = _resolve_log_path(config, as_of_date, log_to_file)
+
+    summary: PipelineSummary | None = None
+    try:
+        with pipeline_logging(log_path):
+            summary = run_daily_pipeline(
+                config=config,
+                provider=provider,
+                as_of=as_of_date,
+                holdings=holdings,
+                holdings_path=holdings_path,
+                dry_run=dry_run,
+                force=force,
+                channels=channels,
+            )
+    except PipelineExecutionError as exc:
+        _print_pipeline_summary(exc.summary)
+        console.print(f"[red]Pipeline failed at step[/red] {exc.step}: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_pipeline_summary(summary)
+
+
+@run_app.command("rebalance")
+def run_rebalance(
+    config_path: Path = _config_option(),  # noqa: B008 - Typer option factory
+    holdings_path: Path = _holdings_option(),  # noqa: B008 - Typer option factory
+    as_of: str = _asof_option("As-of date for the rebalance pipeline (YYYY-MM-DD)."),
+    dry_run: bool = _dry_run_flag(
+        "Skip actual notification delivery while still generating artifacts."
+    ),
+    force: bool = _force_flag("Force proposal generation even if cadence is not met."),
+    channel: str = _channel_option(),  # noqa: B008 - Typer option factory
+    log_to_file: bool = _log_toggle(),  # noqa: B008 - Typer option factory
+) -> None:
+    """Run the rebalance workflow including signals and proposal generation."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    provider = _resolve_provider(config.data.provider)
+    holdings = load_holdings(holdings_path)
+    channels = _notify_channels(channel)
+    log_path = _resolve_log_path(config, as_of_date, log_to_file)
+
+    summary: PipelineSummary | None = None
+    try:
+        with pipeline_logging(log_path):
+            summary = run_rebalance_pipeline(
+                config=config,
+                provider=provider,
+                as_of=as_of_date,
+                holdings=holdings,
+                holdings_path=holdings_path,
+                dry_run=dry_run,
+                force=force,
+                channels=channels,
+            )
+    except PipelineExecutionError as exc:
+        _print_pipeline_summary(exc.summary)
+        console.print(f"[red]Pipeline failed at step[/red] {exc.step}: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_pipeline_summary(summary)
+
+
+@backtest_app.command("run")
+def backtest_run(
+    config_path: Path = _config_option(),  # noqa: B008 - Typer option factory
+    start: str = typer.Option(
+        ...,
+        "--start",
+        help="Backtest start date (YYYY-MM-DD)",
+        envvar="TS_BACKTEST_START",
+    ),
+    end: str = typer.Option(
+        ..., "--end", help="Backtest end date (YYYY-MM-DD)", envvar="TS_BACKTEST_END"
+    ),
+    output_dir: Path = typer.Option(  # noqa: B008 - Typer option factory
+        ..., "--output", help="Directory to store backtest artifacts"
+    ),
+    dry_run: bool = _dry_run_flag(
+        "Preview configuration without executing the backtest."
+    ),
+) -> None:
+    """Placeholder for the deterministic backtest engine (story S-11)."""
+
+    console.print(
+        "[yellow]Backtest engine pending implementation (see story S-11).[/yellow]"
+    )
+    console.print(
+        "Requested parameters: "
+        f"config={config_path} start={start} end={end} output={output_dir} dry_run={dry_run}"
+    )
+    raise typer.Exit(code=1)
+
+
 @data_app.command("inspect")
 def data_inspect(
     run: Path = typer.Option(  # noqa: B008 - CLI option definition
@@ -811,6 +1085,9 @@ def rebalance_propose(
         "--signals",
         help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
     ),
+    force: bool = typer.Option(
+        False, help="Ignore cadence checks and overwrite existing proposal."
+    ),
 ) -> None:
     """Build a rebalance proposal and persist the resulting JSON artifact."""
 
@@ -828,6 +1105,7 @@ def rebalance_propose(
             holdings=holdings,
             signals=signals_frame,
             dry_run=False,
+            force=force,
         )
     except Exception as exc:  # pragma: no cover - defensive
         console.print(f"[red]Rebalance proposal failed:[/] {exc}")
@@ -869,6 +1147,9 @@ def rebalance_dry_run(
         10,
         help="Maximum targets to display in summary (set to 0 to hide targets).",
     ),
+    force: bool = typer.Option(
+        False, help="Ignore cadence checks for dry-run evaluation."
+    ),
 ) -> None:
     """Evaluate rebalance logic without writing artifacts."""
 
@@ -886,6 +1167,7 @@ def rebalance_dry_run(
             holdings=holdings,
             signals=signals_frame,
             dry_run=True,
+            force=force,
         )
     except Exception as exc:  # pragma: no cover - defensive
         console.print(f"[red]Rebalance dry run failed:[/] {exc}")

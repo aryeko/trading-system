@@ -1,5 +1,7 @@
 """Tests for the trading system CLI."""
 
+# mypy: allow-untyped-defs
+
 import json
 from collections.abc import Sequence
 from datetime import date
@@ -13,6 +15,11 @@ from typer.testing import CliRunner
 from trading_system import __version__
 from trading_system.cli import app
 from trading_system.data.provider import DataProvider
+from trading_system.orchestrator import (
+    PipelineExecutionError,
+    PipelineStep,
+    PipelineSummary,
+)
 
 runner = CliRunner()
 
@@ -94,6 +101,60 @@ NOTIFY_PAYLOAD = {
     },
     "notes": ["Generated for notification tests"],
 }
+PIPELINE_CONFIG_TEMPLATE = """
+base_ccy: USD
+calendar: NYSE
+data:
+  provider: yahoo
+  lookback_days: 30
+universe:
+  tickers: [AAPL]
+strategy:
+  type: trend_follow
+  entry: "close > sma_100"
+  exit: "close < sma_100"
+  rank: momentum_63d
+risk:
+  crash_threshold_pct: -0.08
+  drawdown_threshold_pct: -0.20
+  market_filter:
+    benchmark: SPY
+    rule: "close > sma_200"
+rebalance:
+  cadence: monthly
+  max_positions: 5
+  equal_weight: true
+  min_weight: 0.05
+  cash_buffer: 0.05
+notify:
+  email: ops@example.com
+  slack_webhook: https://hooks.slack.test/ABC
+paths:
+  data_raw: {base}/data/raw
+  data_curated: {base}/data/curated
+  reports: {base}/reports
+"""
+
+
+def _write_pipeline_config(tmp_path: Path) -> Path:
+    config_text = PIPELINE_CONFIG_TEMPLATE.format(base=tmp_path)
+    config_path = tmp_path / "pipeline-config.yml"
+    config_path.write_text(config_text, encoding="utf-8")
+    return config_path
+
+
+def _write_holdings_file(tmp_path: Path) -> Path:
+    payload = {
+        "as_of_date": "2024-05-01",
+        "base_ccy": "USD",
+        "cash": 5000.0,
+        "positions": [
+            {"symbol": "AAPL", "qty": 5, "cost_basis": 150.0},
+        ],
+    }
+    holdings_path = tmp_path / "holdings.json"
+    holdings_path.write_text(json.dumps(payload), encoding="utf-8")
+    return holdings_path
 
 
 def _write_preprocess_config(tmp_path: Path) -> Path:
@@ -566,3 +627,133 @@ def test_notify_send_dry_run_email(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Email notification ready" in result.stdout
     assert "Daily report for" in result.stdout
+
+
+def test_steps_command_lists_pipeline_steps() -> None:
+    result = runner.invoke(app, ["steps"])
+    assert result.exit_code == 0
+    assert "data pull" in result.stdout
+    assert "run" in result.stdout
+    assert "rebalance" in result.stdout
+
+
+def test_run_daily_command_prints_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_pipeline_config(tmp_path)
+    holdings_path = _write_holdings_file(tmp_path)
+
+    summary = PipelineSummary(
+        as_of=date(2024, 5, 2),
+        success=True,
+        duration=1.23,
+        steps=[
+            PipelineStep(
+                name="data_pull", status="completed", duration=0.12, details="ok"
+            )
+        ],
+        manifest={
+            "report_json": str(
+                tmp_path / "reports" / "2024-05-02" / "daily_report.json"
+            )
+        },
+    )
+
+    def fake_run_daily_pipeline(**kwargs):
+        assert kwargs["holdings_path"] == holdings_path
+        return summary
+
+    def fake_pipeline_logging(path):  # noqa: ANN001 - test stub
+        class _Ctx:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        return _Ctx()
+
+    monkeypatch.setattr("trading_system.cli.pipeline_logging", fake_pipeline_logging)
+    monkeypatch.setattr("trading_system.cli._resolve_provider", lambda name: object())
+    monkeypatch.setattr(
+        "trading_system.cli.run_daily_pipeline", fake_run_daily_pipeline
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "daily",
+            "--config",
+            str(config_path),
+            "--holdings",
+            str(holdings_path),
+            "--asof",
+            "2024-05-02",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "SUCCESS pipeline" in result.stdout
+    assert "report_json" in result.stdout
+
+
+def test_run_daily_command_reports_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_pipeline_config(tmp_path)
+    holdings_path = _write_holdings_file(tmp_path)
+
+    failure_summary = PipelineSummary(
+        as_of=date(2024, 5, 3),
+        success=False,
+        duration=0.5,
+        steps=[
+            PipelineStep(
+                name="data_pull", status="completed", duration=0.1, details="ok"
+            ),
+            PipelineStep(
+                name="risk_evaluate", status="failed", duration=0.2, details="boom"
+            ),
+        ],
+        manifest={},
+    )
+    error = PipelineExecutionError("risk_evaluate", "boom", summary=failure_summary)
+
+    def fake_pipeline_logging(path):  # noqa: ANN001 - test stub
+        class _Ctx:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        return _Ctx()
+
+    def fake_run_daily_pipeline(**kwargs):
+        raise error
+
+    monkeypatch.setattr("trading_system.cli.pipeline_logging", fake_pipeline_logging)
+    monkeypatch.setattr("trading_system.cli._resolve_provider", lambda name: object())
+    monkeypatch.setattr(
+        "trading_system.cli.run_daily_pipeline", fake_run_daily_pipeline
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "daily",
+            "--config",
+            str(config_path),
+            "--holdings",
+            str(holdings_path),
+            "--asof",
+            "2024-05-03",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Pipeline failed at step risk_evaluate" in result.stdout
+    assert "FAILED pipeline" in result.stdout

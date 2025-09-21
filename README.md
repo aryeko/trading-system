@@ -57,6 +57,14 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
   prints the Slack payload for the existing daily report without sending it.
 - `poetry run ts notify send --config configs/sample-config.yml --as-of YYYY-MM-DD --channel all`
   delivers email and Slack notifications (use `--dry-run` to render without sending).
+- `poetry run ts steps`
+  enumerates the pipeline stages with artifact expectations.
+- `poetry run ts run daily --config configs/sample-config.yml --holdings data/holdings.json --asof YYYY-MM-DD`
+  orchestrates pull → preprocess → risk → report → notify with structured logging.
+- `poetry run ts run rebalance --config configs/sample-config.yml --holdings data/holdings.json --asof YYYY-MM-DD --force`
+  runs the full pipeline including signals/rebalance even when cadence is overriden.
+- `poetry run ts backtest run --config configs/sample-config.yml --start YYYY-MM-DD --end YYYY-MM-DD --output reports/backtests/demo`
+  currently reports pending support (story S-11) while preserving the CLI surface.
 
 ### Handy Automation Commands
 

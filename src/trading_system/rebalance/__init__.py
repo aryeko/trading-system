@@ -92,6 +92,7 @@ class RebalanceEngine:
         *,
         holdings: HoldingsSnapshot,
         signals: pd.DataFrame,
+        force: bool = False,
     ) -> RebalanceResult:
         """Evaluate rebalance logic for ``as_of`` without writing artifacts."""
 
@@ -99,7 +100,7 @@ class RebalanceEngine:
         as_of_date = as_of_ts.date()
         notes: list[str] = []
 
-        if not _is_rebalance_day(as_of_ts, self._cadence):
+        if not force and not _is_rebalance_day(as_of_ts, self._cadence):
             notes.append(f"Cadence {self._cadence} not met on {as_of_date}")
             return RebalanceResult(
                 as_of=as_of_date,
@@ -208,10 +209,11 @@ class RebalanceEngine:
         holdings: HoldingsSnapshot,
         signals: pd.DataFrame,
         dry_run: bool = False,
+        force: bool = False,
     ) -> RebalanceResult:
         """Evaluate rebalance and persist proposal unless ``dry_run``."""
 
-        result = self.evaluate(as_of, holdings=holdings, signals=signals)
+        result = self.evaluate(as_of, holdings=holdings, signals=signals, force=force)
         if dry_run:
             return result
 
