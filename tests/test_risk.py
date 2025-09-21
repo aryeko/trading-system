@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from typer.testing import CliRunner
 
@@ -53,7 +54,7 @@ def _write_config(tmp_path: Path, tickers: list[str]) -> Path:
 def _make_curated_frame(
     dates: pd.DatetimeIndex,
     symbol: str,
-    closes: np.ndarray,
+    closes: npt.NDArray[np.float_],
 ) -> pd.DataFrame:
     series = pd.Series(closes, index=dates, dtype=float)
     values = series.to_numpy(copy=True)

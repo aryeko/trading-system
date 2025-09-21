@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pytest
 from typer.testing import CliRunner
@@ -87,7 +88,10 @@ def _write_signals_config(tmp_path: Path, tickers: Sequence[str]) -> Path:
 
 
 def _make_signal_frame(
-    dates: pd.DatetimeIndex, symbol: str, prices: np.ndarray, sma_offset: float
+    dates: pd.DatetimeIndex,
+    symbol: str,
+    prices: npt.NDArray[np.float_],
+    sma_offset: float,
 ) -> pd.DataFrame:
     series = pd.Series(prices, index=dates)
     values = series.to_numpy(dtype=float, copy=True)

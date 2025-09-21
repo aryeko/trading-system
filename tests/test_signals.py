@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import pytest
 
@@ -47,7 +48,7 @@ def _write_config(tmp_path: Path, tickers: list[str]) -> Path:
 
 def _make_curated_frame(
     dates: pd.DatetimeIndex,
-    close_values: np.ndarray,
+    close_values: npt.NDArray[np.float_],
     symbol: str,
     *,
     sma_offset: float,
