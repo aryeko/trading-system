@@ -326,7 +326,15 @@ class EmailChannel:
         message = self.compose_message(summary, recipient, sender=sender)
 
         if dry_run:
-            return NotificationStatus("email", True, message.as_string())
+            body = message.get_content()
+            header_lines = [
+                f"Subject: {message['Subject']}",
+                f"To: {message['To']}",
+                f"From: {message['From']}",
+                "",
+            ]
+            preview = "\n".join(header_lines) + body
+            return NotificationStatus("email", True, preview)
 
         host = os.environ.get("TS_SMTP_HOST")
         if not host:
