@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import pandas as pd
 
@@ -477,9 +477,8 @@ def _orders_and_turnover(
         price = price_map.get(symbol)
         if price is None:
             continue
-        current_qty = (
-            current_positions.get(symbol).qty if symbol in current_positions else 0.0
-        )
+        current_position = current_positions.get(symbol)
+        current_qty = current_position.qty if current_position is not None else 0.0
         current_weight = current_values.get(symbol, 0.0) / total_value
         target_weight = target_weights.get(symbol, 0.0)
         turnover += abs(target_weight - current_weight)

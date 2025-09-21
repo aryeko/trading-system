@@ -582,7 +582,7 @@ def rebalance_propose(
         help="Holdings snapshot JSON file.",
     ),
     as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
-    signals_path: Path | None = typer.Option(
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--signals",
         help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
@@ -634,7 +634,7 @@ def rebalance_dry_run(
         help="Holdings snapshot JSON file.",
     ),
     as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
-    signals_path: Path | None = typer.Option(
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--signals",
         help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
