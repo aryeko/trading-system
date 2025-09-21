@@ -1,11 +1,13 @@
 """Command line interface for the trading system toolkit."""
 
 import json
+import math
 import os
 import shutil
 import sys
 from collections.abc import Callable, Iterable
 from datetime import date
+from numbers import Real
 from pathlib import Path
 
 import typer
@@ -17,12 +19,15 @@ from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
 from trading_system.preprocess import Preprocessor, PreprocessResult
+from trading_system.signals import StrategyEngine
 
 app = typer.Typer(help="Utilities for research, reporting, and operations.")
 config_app = typer.Typer(help="Configuration management commands.")
 data_app = typer.Typer(help="Raw data acquisition commands.")
+signals_app = typer.Typer(help="Strategy signal evaluation commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
+app.add_typer(signals_app, name="signals")
 console = Console()
 
 _DEFAULT_DOCTOR_TOOLS: tuple[str, ...] = (
@@ -224,6 +229,23 @@ def _format_meta_value(value: object) -> str:
     return str(value)
 
 
+def _format_number(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, Real):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value)
+        except ValueError:
+            return value
+    else:
+        return str(value)
+    if math.isnan(number) or math.isinf(number):
+        return str(number)
+    return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
 @data_app.command("inspect")
 def data_inspect(
     run: Path = typer.Option(  # noqa: B008 - CLI option definition
@@ -344,6 +366,124 @@ def _print_preprocess_summary(result: PreprocessResult) -> None:
         path = result.artifacts.get(symbol)
         table.add_row(symbol, str(path) if path else "—")
     console.print(table)
+
+
+@signals_app.command("build")
+def signals_build(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
+        ..., help="As-of date for signals (YYYY-MM-DD)."
+    ),
+    window: int = typer.Option(252, help="Lookback window in rows for evaluation."),
+    dry_run: bool = typer.Option(
+        False, help="Evaluate without writing parquet output."
+    ),
+) -> None:
+    """Generate strategy signals for the configured universe."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    engine = StrategyEngine(config)
+
+    try:
+        result = engine.build(as_of_date, window=window, dry_run=dry_run)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Signal build failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    frame = result.frame
+    console.print(
+        f"[green]Evaluated strategy for[/green] {as_of_date} — symbols processed: {len(frame)}"
+    )
+    console.print(
+        f"Entry passes: {result.entry_count} | Exit passes: {result.exit_count}"
+    )
+
+    if frame.empty:
+        console.print("[yellow]No signals were produced.[/yellow]")
+    else:
+        feature_columns = [
+            column
+            for column in frame.columns
+            if column not in {"date", "symbol", "signal", "rank_score"}
+        ]
+        table = Table("symbol", "signal", "rank_score", *feature_columns)
+        for row in frame.itertuples(index=False):
+            feature_values = [
+                _format_number(getattr(row, column)) for column in feature_columns
+            ]
+            table.add_row(
+                str(row.symbol),
+                str(row.signal),
+                _format_number(row.rank_score),
+                *feature_values,
+            )
+        console.print(table)
+
+    if dry_run:
+        console.print("[yellow]Dry run requested; no files written.[/yellow]")
+    elif result.output_path:
+        console.print(f"Signals written to: {result.output_path}")
+
+
+@signals_app.command("explain")
+def signals_explain(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    symbol: str = typer.Option(..., help="Ticker symbol to inspect."),
+    as_of: str = typer.Option(..., help="As-of date for evaluation (YYYY-MM-DD)."),
+    window: int = typer.Option(252, help="Lookback window in rows for evaluation."),
+) -> None:
+    """Explain strategy rule evaluations for a symbol."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    engine = StrategyEngine(config)
+
+    try:
+        evaluation = engine.explain(symbol, as_of_date, window=window)
+    except KeyError as exc:
+        console.print(f"[red]Symbol not evaluated:[/] {symbol.upper()}")
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Unable to evaluate symbol:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[bold]{evaluation.symbol}[/bold] on {as_of_date}: signal={evaluation.signal}"
+    )
+    console.print(
+        f"Entry rule: {evaluation.entry_rule} | Exit rule: {evaluation.exit_rule} | Rank score: {_format_number(evaluation.rank_score)}"
+    )
+
+    if evaluation.features:
+        feature_table = Table("feature", "value")
+        for name, value in sorted(evaluation.features.items()):
+            feature_table.add_row(name, _format_number(value))
+        console.print(feature_table)
+
+    if evaluation.indicators:
+        indicator_table = Table("indicator", "value")
+        for name, value in sorted(evaluation.indicators.items()):
+            indicator_table.add_row(name, _format_number(value))
+        console.print(indicator_table)
 
 
 @config_app.command("inspect")
