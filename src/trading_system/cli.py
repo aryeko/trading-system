@@ -10,6 +10,7 @@ from datetime import date
 from numbers import Real
 from pathlib import Path
 
+import pandas as pd
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -19,6 +20,7 @@ from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
 from trading_system.preprocess import Preprocessor, PreprocessResult
+from trading_system.rebalance import RebalanceEngine, RebalanceResult
 from trading_system.risk import RiskEngine, load_holdings
 from trading_system.signals import StrategyEngine
 
@@ -26,10 +28,12 @@ app = typer.Typer(help="Utilities for research, reporting, and operations.")
 config_app = typer.Typer(help="Configuration management commands.")
 data_app = typer.Typer(help="Raw data acquisition commands.")
 signals_app = typer.Typer(help="Strategy signal evaluation commands.")
+rebalance_app = typer.Typer(help="Rebalance proposal commands.")
 risk_app = typer.Typer(help="Risk evaluation commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
+app.add_typer(rebalance_app, name="rebalance")
 app.add_typer(risk_app, name="risk")
 console = Console()
 
@@ -247,6 +251,73 @@ def _format_number(value: object) -> str:
     if math.isnan(number) or math.isinf(number):
         return str(number)
     return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def _load_signals_for_cli(
+    config: Config, signals_path: Path | None, as_of_date: date
+) -> pd.DataFrame:
+    if signals_path is None:
+        signals_path = (
+            config.paths.reports / as_of_date.strftime("%Y-%m-%d") / "signals.parquet"
+        )
+    resolved = Path(signals_path)
+    if not resolved.is_file():
+        console.print(f"[red]Signals file not found:[/] {resolved}")
+        raise typer.Exit(code=1)
+    try:
+        frame = pd.read_parquet(resolved)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Unable to read signals parquet:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    return frame
+
+
+def _print_rebalance_summary(
+    result: RebalanceResult, *, max_targets: int | None = None
+) -> None:
+    console.print(f"[bold]{result.status}[/bold] for {result.as_of}")
+    console.print(
+        f"Turnover: {_format_number(result.turnover)} | Cash buffer: {_format_number(result.cash_buffer)}"
+    )
+
+    if result.targets:
+        target_table = Table("symbol", "target_weight", "rationale")
+        targets = list(result.targets)
+        if max_targets is not None and max_targets >= 0:
+            subset = targets[:max_targets]
+        else:
+            subset = targets
+        for target in subset:
+            target_table.add_row(
+                target.symbol,
+                _format_number(target.target_weight),
+                target.rationale or "—",
+            )
+        console.print(target_table)
+        if max_targets is not None and max_targets >= 0 and len(targets) > max_targets:
+            console.print(
+                f"[yellow]… {len(targets) - max_targets} additional targets omitted[/yellow]"
+            )
+    else:
+        console.print("[yellow]No targets proposed.[/yellow]")
+
+    if result.orders:
+        order_table = Table("symbol", "side", "quantity", "notional")
+        for order in result.orders:
+            order_table.add_row(
+                order.symbol,
+                order.side,
+                _format_number(order.quantity),
+                _format_number(order.notional),
+            )
+        console.print(order_table)
+    else:
+        console.print("[yellow]No orders generated.[/yellow]")
+
+    if result.notes:
+        console.print("Notes:")
+        for note in result.notes:
+            console.print(f"  • {note}")
 
 
 @data_app.command("inspect")
@@ -487,6 +558,113 @@ def signals_explain(
         for name, value in sorted(evaluation.indicators.items()):
             indicator_table.add_row(name, _format_number(value))
         console.print(indicator_table)
+
+
+@rebalance_app.command("propose")
+def rebalance_propose(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--signals",
+        help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
+    ),
+) -> None:
+    """Build a rebalance proposal and persist the resulting JSON artifact."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    holdings = load_holdings(holdings_path)
+    signals_frame = _load_signals_for_cli(config, signals_path, as_of_date)
+    engine = RebalanceEngine(config)
+
+    try:
+        result = engine.build(
+            as_of_date,
+            holdings=holdings,
+            signals=signals_frame,
+            dry_run=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Rebalance proposal failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_rebalance_summary(result)
+    if result.output_path:
+        console.print(f"Proposal written to: {result.output_path}")
+
+
+@rebalance_app.command("dry-run")
+def rebalance_dry_run(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--signals",
+        help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
+    ),
+    max_candidates: int | None = typer.Option(
+        10,
+        help="Maximum targets to display in summary (set to 0 to hide targets).",
+    ),
+) -> None:
+    """Evaluate rebalance logic without writing artifacts."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    holdings = load_holdings(holdings_path)
+    signals_frame = _load_signals_for_cli(config, signals_path, as_of_date)
+    engine = RebalanceEngine(config)
+
+    try:
+        result = engine.build(
+            as_of_date,
+            holdings=holdings,
+            signals=signals_frame,
+            dry_run=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Rebalance dry run failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    limit = None if max_candidates is None or max_candidates < 0 else max_candidates
+    _print_rebalance_summary(result, max_targets=limit)
 
 
 @risk_app.command("evaluate")
