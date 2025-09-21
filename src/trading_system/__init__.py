@@ -3,6 +3,7 @@
 from trading_system.config import Config, load_config
 from trading_system.data import run_data_pull
 from trading_system.rebalance import RebalanceEngine
+from trading_system.report import ReportBuilder
 from trading_system.risk import RiskEngine, load_holdings
 from trading_system.signals import StrategyEngine
 
@@ -13,6 +14,7 @@ __all__ = [
     "run_data_pull",
     "StrategyEngine",
     "RiskEngine",
+    "ReportBuilder",
     "RebalanceEngine",
     "load_holdings",
 ]

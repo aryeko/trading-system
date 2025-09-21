@@ -5,7 +5,8 @@ import math
 import os
 import shutil
 import sys
-from collections.abc import Callable, Iterable
+import webbrowser
+from collections.abc import Callable, Iterable, Mapping
 from datetime import date
 from numbers import Real
 from pathlib import Path
@@ -21,7 +22,8 @@ from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
 from trading_system.preprocess import Preprocessor, PreprocessResult
 from trading_system.rebalance import RebalanceEngine, RebalanceResult
-from trading_system.risk import RiskEngine, load_holdings
+from trading_system.report import ReportBuilder, ReportResult
+from trading_system.risk import HoldingsSnapshot, RiskEngine, load_holdings
 from trading_system.signals import StrategyEngine
 
 app = typer.Typer(help="Utilities for research, reporting, and operations.")
@@ -29,11 +31,13 @@ config_app = typer.Typer(help="Configuration management commands.")
 data_app = typer.Typer(help="Raw data acquisition commands.")
 signals_app = typer.Typer(help="Strategy signal evaluation commands.")
 rebalance_app = typer.Typer(help="Rebalance proposal commands.")
+report_app = typer.Typer(help="Daily report generation commands.")
 risk_app = typer.Typer(help="Risk evaluation commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
 app.add_typer(rebalance_app, name="rebalance")
+app.add_typer(report_app, name="report")
 app.add_typer(risk_app, name="risk")
 console = Console()
 
@@ -254,22 +258,47 @@ def _format_number(value: object) -> str:
 
 
 def _load_signals_for_cli(
-    config: Config, signals_path: Path | None, as_of_date: date
-) -> pd.DataFrame:
+    config: Config,
+    signals_path: Path | None,
+    as_of_date: date,
+    *,
+    required: bool = True,
+) -> pd.DataFrame | None:
     if signals_path is None:
         signals_path = (
             config.paths.reports / as_of_date.strftime("%Y-%m-%d") / "signals.parquet"
         )
     resolved = Path(signals_path)
     if not resolved.is_file():
-        console.print(f"[red]Signals file not found:[/] {resolved}")
-        raise typer.Exit(code=1)
+        if required:
+            console.print(f"[red]Signals file not found:[/] {resolved}")
+            raise typer.Exit(code=1)
+        return None
     try:
         frame = pd.read_parquet(resolved)
     except Exception as exc:  # pragma: no cover - defensive
         console.print(f"[red]Unable to read signals parquet:[/] {exc}")
         raise typer.Exit(code=1) from exc
     return frame
+
+
+def _maybe_load_json(
+    path: Path, *, required: bool, description: str
+) -> tuple[Mapping[str, object] | None, Path | None]:
+    if not path.is_file():
+        if required:
+            console.print(f"[red]{description} not found:[/] {path}")
+            raise typer.Exit(code=1)
+        return None, None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]Failed to parse {description} JSON:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+    if not isinstance(payload, Mapping):
+        console.print(f"[red]{description} must be a JSON object.[/]")
+        raise typer.Exit(code=1)
+    return payload, path
 
 
 def _print_rebalance_summary(
@@ -318,6 +347,92 @@ def _print_rebalance_summary(
         console.print("Notes:")
         for note in result.notes:
             console.print(f"  • {note}")
+
+
+def _print_report_summary(result: ReportResult) -> None:
+    payload = result.payload
+    portfolio = payload.get("portfolio", {})
+    actions = payload.get("actions", {})
+    console.print(f"[bold]Report generated for {result.as_of}[/bold]")
+    console.print(
+        "Value: "
+        + _format_number(portfolio.get("value"))
+        + " | Cash: "
+        + _format_number(portfolio.get("cash"))
+        + " | Positions: "
+        + str(len(portfolio.get("positions", [])))
+    )
+    console.print(
+        "Orders: "
+        + str(len(actions.get("orders", [])))
+        + " | Status: "
+        + str(actions.get("status", "—"))
+        + " | Turnover: "
+        + _format_number(actions.get("turnover"))
+    )
+    if result.notes:
+        console.print("Notes:")
+        for note in result.notes:
+            console.print(f"  • {note}")
+
+
+def _generate_report_result(
+    config: Config,
+    as_of_date: date,
+    holdings: HoldingsSnapshot,
+    *,
+    holdings_path: Path,
+    risk_path_option: Path | None,
+    proposal_path_option: Path | None,
+    signals_path_option: Path | None,
+    include_pdf: bool,
+) -> ReportResult:
+    reports_dir = config.paths.reports / as_of_date.strftime("%Y-%m-%d")
+
+    risk_candidate = risk_path_option or reports_dir / "risk_alerts.json"
+    risk_payload, risk_artifact_path = _maybe_load_json(
+        risk_candidate,
+        required=risk_path_option is not None,
+        description="Risk alerts",
+    )
+
+    proposal_candidate = proposal_path_option or reports_dir / "rebalance_proposal.json"
+    proposal_payload, proposal_artifact_path = _maybe_load_json(
+        proposal_candidate,
+        required=proposal_path_option is not None,
+        description="Rebalance proposal",
+    )
+
+    signals_candidate = (
+        signals_path_option
+        if signals_path_option is not None
+        else reports_dir / "signals.parquet"
+    )
+    signals_frame = _load_signals_for_cli(
+        config,
+        signals_path_option,
+        as_of_date,
+        required=signals_path_option is not None,
+    )
+    signals_artifact_path = None
+    if signals_frame is not None:
+        candidate_path = Path(signals_candidate)
+        if candidate_path.is_file():
+            signals_artifact_path = candidate_path
+
+    builder = ReportBuilder(config)
+    return builder.build(
+        as_of_date,
+        holdings=holdings,
+        holdings_path=holdings_path,
+        risk_payload=risk_payload,
+        risk_path=risk_artifact_path,
+        proposal_payload=proposal_payload,
+        proposal_path=proposal_artifact_path,
+        signals=signals_frame,
+        signals_path=signals_artifact_path,
+        include_pdf=include_pdf,
+    )
 
 
 @data_app.command("inspect")
@@ -594,6 +709,8 @@ def rebalance_propose(
     as_of_date = _parse_as_of(as_of)
     holdings = load_holdings(holdings_path)
     signals_frame = _load_signals_for_cli(config, signals_path, as_of_date)
+    if signals_frame is None:  # pragma: no cover - defensive
+        raise AssertionError("Signals frame must be available for rebalance proposal")
     engine = RebalanceEngine(config)
 
     try:
@@ -650,6 +767,8 @@ def rebalance_dry_run(
     as_of_date = _parse_as_of(as_of)
     holdings = load_holdings(holdings_path)
     signals_frame = _load_signals_for_cli(config, signals_path, as_of_date)
+    if signals_frame is None:  # pragma: no cover - defensive
+        raise AssertionError("Signals frame must be available for rebalance dry run")
     engine = RebalanceEngine(config)
 
     try:
@@ -665,6 +784,173 @@ def rebalance_dry_run(
 
     limit = None if max_candidates is None or max_candidates < 0 else max_candidates
     _print_rebalance_summary(result, max_targets=limit)
+
+
+@report_app.command("build")
+def report_build(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    as_of: str = typer.Option(..., help="As-of date for report (YYYY-MM-DD)."),
+    risk_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--risk",
+        help="Optional path to risk_alerts.json (defaults to reports/<as_of>/risk_alerts.json).",
+    ),
+    proposal_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--proposal",
+        help="Optional path to rebalance_proposal.json (defaults to reports/<as_of>/rebalance_proposal.json).",
+    ),
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--signals",
+        help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
+    ),
+    include_pdf: bool = typer.Option(  # noqa: B008 - CLI option definition
+        False,
+        "--include-pdf",
+        help="Render a PDF copy when a renderer is available.",
+    ),
+) -> None:
+    """Render the daily report and persist HTML/JSON artifacts."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+
+    try:
+        holdings = load_holdings(holdings_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Failed to load holdings:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        result = _generate_report_result(
+            config,
+            as_of_date,
+            holdings,
+            holdings_path=holdings_path,
+            risk_path_option=risk_path,
+            proposal_path_option=proposal_path,
+            signals_path_option=signals_path,
+            include_pdf=include_pdf,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Report generation failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_report_summary(result)
+
+    if result.html_path:
+        console.print(f"HTML report: {result.html_path}")
+    if result.json_path:
+        console.print(f"JSON report: {result.json_path}")
+    if include_pdf:
+        if result.pdf_path:
+            console.print(f"PDF report: {result.pdf_path}")
+        else:
+            console.print("[yellow]PDF not generated; see notes above.[/yellow]")
+
+
+@report_app.command("preview")
+def report_preview(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    as_of: str = typer.Option(..., help="As-of date for report (YYYY-MM-DD)."),
+    risk_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--risk",
+        help="Optional path to risk_alerts.json (defaults to reports/<as_of>/risk_alerts.json).",
+    ),
+    proposal_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--proposal",
+        help="Optional path to rebalance_proposal.json (defaults to reports/<as_of>/rebalance_proposal.json).",
+    ),
+    signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
+        None,
+        "--signals",
+        help="Optional path to signals parquet (defaults to reports/<as_of>/signals.parquet).",
+    ),
+    open_browser: bool = typer.Option(  # noqa: B008 - CLI option definition
+        False,
+        "--open/--no-open",
+        help="Open the rendered HTML in the default browser.",
+    ),
+) -> None:
+    """Build the report artifacts and optionally open the HTML preview."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+
+    try:
+        holdings = load_holdings(holdings_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Failed to load holdings:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        result = _generate_report_result(
+            config,
+            as_of_date,
+            holdings,
+            holdings_path=holdings_path,
+            risk_path_option=risk_path,
+            proposal_path_option=proposal_path,
+            signals_path_option=signals_path,
+            include_pdf=False,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Report preview failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_report_summary(result)
+
+    if result.html_path:
+        console.print(f"HTML report: {result.html_path}")
+        if open_browser:
+            try:
+                webbrowser.open(result.html_path.as_uri())
+            except Exception as exc:  # pragma: no cover - best effort
+                console.print(f"[yellow]Unable to open browser:[/] {exc}")
+    elif open_browser:
+        console.print("[yellow]No HTML artifact available to open.[/yellow]")
+
+    if result.json_path:
+        console.print(f"JSON report: {result.json_path}")
 
 
 @risk_app.command("evaluate")
