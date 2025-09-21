@@ -39,6 +39,13 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
    poetry run tests
    ```
 
+## CLI Highlights
+
+- `poetry run ts signals build --config configs/sample-config.yml --as-of YYYY-MM-DD`
+  generates a `signals.parquet` artifact with rule outcomes and rank scores.
+- `poetry run ts signals explain --config configs/sample-config.yml --symbol AAPL --as-of YYYY-MM-DD`
+  prints the entry/exit evaluation details and key indicator values for a symbol.
+
 ### Handy Automation Commands
 
 All local automation lives under Poetry scripts:

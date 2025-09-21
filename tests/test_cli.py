@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from typer.testing import CliRunner
@@ -44,11 +45,69 @@ preprocess:
   rolling_peak_window: 5
 """
 
+SIGNALS_CONFIG = """
+base_ccy: USD
+calendar: NYSE
+data:
+  provider: yahoo
+  lookback_days: 30
+universe:
+  tickers: [{tickers}]
+strategy:
+  type: trend_follow
+  entry: "close > sma_100"
+  exit: "close < sma_100"
+  rank: momentum_63d
+risk:
+  crash_threshold_pct: -0.08
+  drawdown_threshold_pct: -0.20
+rebalance:
+  cadence: monthly
+  max_positions: 5
+notify:
+  email: ops@example.com
+paths:
+  data_raw: data/raw
+  data_curated: data/curated
+  reports: reports
+"""
+
 
 def _write_preprocess_config(tmp_path: Path) -> Path:
     config_path = tmp_path / "config.yml"
     config_path.write_text(PREPROCESS_CONFIG, encoding="utf-8")
     return config_path
+
+
+def _write_signals_config(tmp_path: Path, tickers: Sequence[str]) -> Path:
+    config_path = tmp_path / "config.yml"
+    config_text = SIGNALS_CONFIG.format(tickers=", ".join(tickers))
+    config_path.write_text(config_text, encoding="utf-8")
+    return config_path
+
+
+def _make_signal_frame(
+    dates: pd.DatetimeIndex, symbol: str, prices: np.ndarray, sma_offset: float
+) -> pd.DataFrame:
+    series = pd.Series(prices, index=dates)
+    values = series.to_numpy(dtype=float, copy=True)
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "symbol": symbol,
+            "open": values,
+            "high": values,
+            "low": values,
+            "close": values,
+            "volume": np.full(len(series), 1_000),
+            "adj_close": values,
+            "sma_100": values + sma_offset,
+            "sma_200": values + sma_offset,
+            "ret_1d": series.pct_change().fillna(0.0).values,
+            "ret_20d": series.pct_change(20).fillna(0.0).values,
+            "rolling_peak": series.cummax().values,
+        }
+    )
 
 
 def test_cli_help_lists_commands() -> None:
@@ -328,3 +387,94 @@ def test_data_preprocess_writes_curated_outputs(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert curated_path.exists()
+
+
+def test_signals_build_writes_parquet(tmp_path: Path) -> None:
+    config_path = _write_signals_config(tmp_path, ["AAPL"])
+    as_of = "2024-05-20"
+    dates = pd.bdate_range(end=pd.Timestamp(as_of), periods=70)
+    frame = _make_signal_frame(
+        dates, "AAPL", np.linspace(80, 120, len(dates)), sma_offset=-1.0
+    )
+    curated_dir = config_path.parent / "data" / "curated" / as_of
+    curated_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(curated_dir / "AAPL.parquet", index=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "signals",
+            "build",
+            "--config",
+            str(config_path),
+            "--as-of",
+            as_of,
+        ],
+    )
+
+    output_path = config_path.parent / "reports" / as_of / "signals.parquet"
+    assert result.exit_code == 0
+    assert output_path.exists()
+    stored = pd.read_parquet(output_path)
+    assert "signal" in stored.columns
+    assert "momentum_63d" in stored.columns
+
+
+def test_signals_build_dry_run_skips_write(tmp_path: Path) -> None:
+    config_path = _write_signals_config(tmp_path, ["AAPL"])
+    as_of = "2024-05-20"
+    dates = pd.bdate_range(end=pd.Timestamp(as_of), periods=70)
+    frame = _make_signal_frame(
+        dates, "AAPL", np.linspace(80, 120, len(dates)), sma_offset=-1.0
+    )
+    curated_dir = config_path.parent / "data" / "curated" / as_of
+    curated_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(curated_dir / "AAPL.parquet", index=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "signals",
+            "build",
+            "--config",
+            str(config_path),
+            "--as-of",
+            as_of,
+            "--dry-run",
+        ],
+    )
+
+    output_path = config_path.parent / "reports" / as_of / "signals.parquet"
+    assert result.exit_code == 0
+    assert "Dry run requested" in result.stdout
+    assert not output_path.exists()
+
+
+def test_signals_explain_outputs_details(tmp_path: Path) -> None:
+    config_path = _write_signals_config(tmp_path, ["AAPL"])
+    as_of = "2024-05-20"
+    dates = pd.bdate_range(end=pd.Timestamp(as_of), periods=70)
+    frame = _make_signal_frame(
+        dates, "AAPL", np.linspace(80, 120, len(dates)), sma_offset=-1.0
+    )
+    curated_dir = config_path.parent / "data" / "curated" / as_of
+    curated_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(curated_dir / "AAPL.parquet", index=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "signals",
+            "explain",
+            "--config",
+            str(config_path),
+            "--symbol",
+            "AAPL",
+            "--as-of",
+            as_of,
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "AAPL" in result.stdout
+    assert "signal=" in result.stdout
