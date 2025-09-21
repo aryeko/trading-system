@@ -20,6 +20,11 @@ from rich.table import Table
 from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
+from trading_system.notify import (
+    NotificationService,
+    NotificationStatus,
+    load_report_summary,
+)
 from trading_system.preprocess import Preprocessor, PreprocessResult
 from trading_system.rebalance import RebalanceEngine, RebalanceResult
 from trading_system.report import ReportBuilder, ReportResult
@@ -33,12 +38,14 @@ signals_app = typer.Typer(help="Strategy signal evaluation commands.")
 rebalance_app = typer.Typer(help="Rebalance proposal commands.")
 report_app = typer.Typer(help="Daily report generation commands.")
 risk_app = typer.Typer(help="Risk evaluation commands.")
+notify_app = typer.Typer(help="Notification delivery commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
 app.add_typer(rebalance_app, name="rebalance")
 app.add_typer(report_app, name="report")
 app.add_typer(risk_app, name="risk")
+app.add_typer(notify_app, name="notify")
 console = Console()
 
 _DEFAULT_DOCTOR_TOOLS: tuple[str, ...] = (
@@ -433,6 +440,108 @@ def _generate_report_result(
         signals_path=signals_artifact_path,
         include_pdf=include_pdf,
     )
+
+
+def _notify_channels(value: str) -> tuple[str, ...]:
+    channels = [part.strip() for part in value.split(",") if part.strip()]
+    if not channels:
+        return ("all",)
+    return tuple(channels)
+
+
+def _print_notification_status(status: NotificationStatus, *, dry_run: bool) -> None:
+    label = status.channel.capitalize()
+    if status.delivered:
+        console.print(f"[green]{label} notification ready.[/green]")
+    else:
+        message = status.details or "Delivery failed."
+        console.print(f"[red]{label} notification failed:[/] {message}")
+    if dry_run and status.details:
+        console.print(status.details)
+
+
+@notify_app.command("send")
+def notify_send(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
+        ..., help="As-of date for the notification (YYYY-MM-DD)."
+    ),
+    channel: str = typer.Option(
+        "all",
+        "--channel",
+        help="Which channels to use (email|slack|all or comma separated).",
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Render notifications without sending them."
+    ),
+) -> None:
+    """Dispatch notifications referencing the generated report artifacts."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    summary = load_report_summary(config, as_of_date)
+    service = NotificationService()
+
+    requested_channels = _notify_channels(channel)
+    statuses: list[NotificationStatus] = []
+    for group in requested_channels:
+        statuses.extend(service.dispatch(summary, config, [group], dry_run=dry_run))
+
+    success = any(status.delivered for status in statuses)
+    for status in statuses:
+        _print_notification_status(status, dry_run=dry_run)
+
+    if not success:
+        raise typer.Exit(code=1)
+
+
+@notify_app.command("preview")
+def notify_preview(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
+        ..., help="As-of date for the notification (YYYY-MM-DD)."
+    ),
+    channel: str = typer.Option(
+        "all",
+        "--channel",
+        help="Which channel payload to preview (email|slack|all).",
+    ),
+) -> None:
+    """Preview notification payloads without sending them."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+    summary = load_report_summary(config, as_of_date)
+    service = NotificationService()
+
+    requested_channels = _notify_channels(channel)
+    statuses: list[NotificationStatus] = []
+    for group in requested_channels:
+        statuses.extend(service.dispatch(summary, config, [group], dry_run=True))
+
+    for status in statuses:
+        _print_notification_status(status, dry_run=True)
+
+    if not any(status.delivered for status in statuses):
+        raise typer.Exit(code=1)
 
 
 @data_app.command("inspect")

@@ -53,6 +53,10 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
   compiles HTML/JSON daily operator reports (add `--include-pdf` to request PDF output).
 - `poetry run ts report preview --config configs/sample-config.yml --holdings data/holdings.json --as-of YYYY-MM-DD --open`
   regenerates the report and optionally opens the HTML for manual QA.
+- `poetry run ts notify preview --config configs/sample-config.yml --as-of YYYY-MM-DD --channel slack`
+  prints the Slack payload for the existing daily report without sending it.
+- `poetry run ts notify send --config configs/sample-config.yml --as-of YYYY-MM-DD --channel all`
+  delivers email and Slack notifications (use `--dry-run` to render without sending).
 
 ### Handy Automation Commands
 
@@ -72,3 +76,16 @@ All local automation lives under Poetry scripts:
 - Testing: `pytest` & `pytest-cov`
 
 CI workflows execute the same toolchain to keep `main` green.
+
+### Notification Setup
+
+Email delivery expects the following environment variables:
+
+- `TS_EMAIL_SENDER` — From address used in the outgoing message.
+- `TS_SMTP_HOST` — SMTP server hostname.
+- `TS_SMTP_PORT` — SMTP port (default 587).
+- `TS_SMTP_USERNAME`/`TS_SMTP_PASSWORD` — Optional credentials for authenticated servers.
+- `TS_SMTP_STARTTLS` — Set to `false` to disable STARTTLS (enabled by default).
+
+Slack notifications require `config.notify.slack_webhook` to point at an incoming webhook URL. Run
+`poetry run ts notify send --dry-run ...` during setup to validate formatting without hitting external services.

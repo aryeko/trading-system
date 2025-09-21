@@ -36,6 +36,7 @@ rebalance:
   max_positions: 5
 notify:
   email: ops@example.com
+  slack_webhook: https://hooks.slack.test/ABC
 paths:
   data_raw: data/raw
   data_curated: data/curated
@@ -66,11 +67,33 @@ rebalance:
   max_positions: 5
 notify:
   email: ops@example.com
+  slack_webhook: https://hooks.slack.test/ABC
 paths:
   data_raw: data/raw
   data_curated: data/curated
   reports: reports
 """
+
+NOTIFY_PAYLOAD = {
+    "as_of": "2024-05-02",
+    "generated_at": "2024-05-02T22:30:00+00:00",
+    "base_currency": "USD",
+    "risk": {"market_state": "RISK_ON", "alerts": []},
+    "actions": {
+        "orders": [
+            {
+                "symbol": "MSFT",
+                "side": "BUY",
+                "quantity": 5,
+                "notional": 1500.0,
+            }
+        ],
+        "exits": [],
+        "status": "READY",
+        "turnover": 0.15,
+    },
+    "notes": ["Generated for notification tests"],
+}
 
 
 def _write_preprocess_config(tmp_path: Path) -> Path:
@@ -84,6 +107,22 @@ def _write_signals_config(tmp_path: Path, tickers: Sequence[str]) -> Path:
     config_text = SIGNALS_CONFIG.format(tickers=", ".join(tickers))
     config_path.write_text(config_text, encoding="utf-8")
     return config_path
+
+
+def _write_notify_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "notify-config.yml"
+    config_path.write_text(SIGNALS_CONFIG.format(tickers="AAPL"), encoding="utf-8")
+    return config_path
+
+
+def _write_report_artifacts(base_dir: Path, as_of: str) -> None:
+    report_dir = base_dir / "reports" / as_of
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "daily_report.json").write_text(
+        json.dumps(NOTIFY_PAYLOAD, indent=2), encoding="utf-8"
+    )
+    (report_dir / "daily_report.html").write_text("<html></html>", encoding="utf-8")
+    (report_dir / "daily_report.pdf").write_bytes(b"%PDF-1.4")
 
 
 def _make_signal_frame(
@@ -478,3 +517,52 @@ def test_signals_explain_outputs_details(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "AAPL" in result.stdout
     assert "signal=" in result.stdout
+
+
+def test_notify_preview_outputs_payload(tmp_path: Path) -> None:
+    config_path = _write_notify_config(tmp_path)
+    as_of = "2024-05-02"
+    _write_report_artifacts(config_path.parent, as_of)
+
+    result = runner.invoke(
+        app,
+        [
+            "notify",
+            "preview",
+            "--config",
+            str(config_path),
+            "--as-of",
+            as_of,
+            "--channel",
+            "slack",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Slack notification ready" in result.stdout
+    assert '"blocks"' in result.stdout
+
+
+def test_notify_send_dry_run_email(tmp_path: Path) -> None:
+    config_path = _write_notify_config(tmp_path)
+    as_of = "2024-05-02"
+    _write_report_artifacts(config_path.parent, as_of)
+
+    result = runner.invoke(
+        app,
+        [
+            "notify",
+            "send",
+            "--config",
+            str(config_path),
+            "--as-of",
+            as_of,
+            "--channel",
+            "email",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Email notification ready" in result.stdout
+    assert "Daily report for" in result.stdout
