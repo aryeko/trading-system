@@ -80,6 +80,20 @@ class NotifyConfig(BaseModel):
     slack_webhook: str | None = None
 
 
+class BacktestConfig(BaseModel):
+    """Deterministic backtest parameters."""
+
+    model_config = ConfigDict(extra="allow")
+
+    initial_cash: float = 100_000.0
+    slippage_pct: float = 0.001
+    commission_per_trade: float = 0.0
+    annual_risk_free_rate: float = 0.0
+    seed: int | None = 7_318_009
+    include_chart: bool = True
+    trading_days_per_year: int = 252
+
+
 class PathsConfig(BaseModel):
     """Canonical project paths."""
 
@@ -121,6 +135,7 @@ class Config(BaseModel):
     notify: NotifyConfig
     paths: PathsConfig
     preprocess: PreprocessConfig | None = None
+    backtest: BacktestConfig | None = None
 
 
 def _resolve_directories(
@@ -177,6 +192,7 @@ __all__ = [
     "RiskConfig",
     "RebalanceConfig",
     "NotifyConfig",
+    "BacktestConfig",
     "PathsConfig",
     "PreprocessConfig",
     "load_config",

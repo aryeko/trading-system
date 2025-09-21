@@ -69,6 +69,10 @@ mypy_path = ["src"]
 module = ["yfinance"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["plotly", "plotly.graph_objects"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra"

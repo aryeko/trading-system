@@ -35,3 +35,10 @@ paths:
 preprocess:
   forward_fill_limit: 1
   rolling_peak_window: 252
+backtest:
+  initial_cash: 100000
+  slippage_pct: 0.001
+  commission_per_trade: 1.0
+  annual_risk_free_rate: 0.02
+  include_chart: true
+  trading_days_per_year: 252
