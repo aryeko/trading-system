@@ -2,9 +2,10 @@
 
 # mypy: allow-untyped-defs
 
+import hashlib
 import json
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,12 @@ from typer.testing import CliRunner
 from trading_system import __version__
 from trading_system.cli import app
 from trading_system.data.provider import DataProvider
+from trading_system.observability.manifest import (
+    ManifestArtifact,
+    ManifestRun,
+    ManifestStep,
+    PipelineManifest,
+)
 from trading_system.orchestrator import (
     PipelineExecutionError,
     PipelineStep,
@@ -184,6 +191,86 @@ def _write_report_artifacts(base_dir: Path, as_of: str) -> None:
     )
     (report_dir / "daily_report.html").write_text("<html></html>", encoding="utf-8")
     (report_dir / "daily_report.pdf").write_bytes(b"%PDF-1.4")
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_manifest_payload(base_dir: Path, *, corrupt: bool = False) -> Path:
+    run_dir = base_dir / "reports" / "2024-05-02"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config_path = base_dir / "config.yml"
+    config_path.write_text("config", encoding="utf-8")
+    holdings_path = base_dir / "holdings.json"
+    holdings_path.write_text("{}", encoding="utf-8")
+    log_path = run_dir / "run.log"
+    log_path.write_text("log", encoding="utf-8")
+    report_path = run_dir / "daily_report.json"
+    report_path.write_text("{}", encoding="utf-8")
+
+    now = datetime.now(UTC)
+    manifest = PipelineManifest(
+        run=ManifestRun(
+            pipeline="daily",
+            as_of=date(2024, 5, 2),
+            started_at=now,
+            completed_at=now,
+            duration_seconds=0.0,
+            success=True,
+            log_path=str(log_path),
+            config_path=str(config_path),
+            holdings_path=str(holdings_path),
+            artifacts=[
+                ManifestArtifact(
+                    key="config",
+                    path=str(config_path),
+                    kind="file",
+                    sha256=_sha(config_path),
+                    size_bytes=config_path.stat().st_size,
+                ),
+                ManifestArtifact(
+                    key="holdings",
+                    path=str(holdings_path),
+                    kind="file",
+                    sha256=_sha(holdings_path),
+                    size_bytes=holdings_path.stat().st_size,
+                ),
+                ManifestArtifact(
+                    key="run_log",
+                    path=str(log_path),
+                    kind="file",
+                    sha256=_sha(log_path),
+                    size_bytes=log_path.stat().st_size,
+                ),
+            ],
+        ),
+        steps=[
+            ManifestStep(
+                name="report_build",
+                status="completed",
+                started_at=now,
+                completed_at=now,
+                duration_seconds=0.0,
+                artifacts=[
+                    ManifestArtifact(
+                        key="report_json",
+                        path=str(report_path),
+                        kind="file",
+                        sha256=_sha(report_path),
+                        size_bytes=report_path.stat().st_size,
+                    )
+                ],
+            )
+        ],
+    )
+
+    if corrupt:
+        manifest.steps[0].artifacts[0].sha256 = "deadbeef"
+
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    return run_dir
 
 
 def _make_signal_frame(
@@ -643,6 +730,7 @@ def test_run_daily_command_prints_summary(
     config_path = _write_pipeline_config(tmp_path)
     holdings_path = _write_holdings_file(tmp_path)
 
+    manifest_path = tmp_path / "reports" / "2024-05-02" / "manifest.json"
     summary = PipelineSummary(
         as_of=date(2024, 5, 2),
         success=True,
@@ -655,15 +743,18 @@ def test_run_daily_command_prints_summary(
         manifest={
             "report_json": str(
                 tmp_path / "reports" / "2024-05-02" / "daily_report.json"
-            )
+            ),
+            "manifest_json": str(manifest_path),
         },
     )
 
     def fake_run_daily_pipeline(**kwargs):
         assert kwargs["holdings_path"] == holdings_path
+        assert kwargs["config_path"] == config_path
+        assert "log_path" in kwargs
         return summary
 
-    def fake_pipeline_logging(path):  # noqa: ANN001 - test stub
+    def fake_pipeline_logging(path, context=None):  # noqa: ANN001 - test stub
         class _Ctx:
             def __enter__(self):
                 return None
@@ -721,7 +812,7 @@ def test_run_daily_command_reports_failure(
     )
     error = PipelineExecutionError("risk_evaluate", "boom", summary=failure_summary)
 
-    def fake_pipeline_logging(path):  # noqa: ANN001 - test stub
+    def fake_pipeline_logging(path, context=None):  # noqa: ANN001 - test stub
         class _Ctx:
             def __enter__(self):
                 return None
@@ -732,6 +823,7 @@ def test_run_daily_command_reports_failure(
         return _Ctx()
 
     def fake_run_daily_pipeline(**kwargs):
+        assert kwargs["config_path"] == config_path
         raise error
 
     monkeypatch.setattr("trading_system.cli.pipeline_logging", fake_pipeline_logging)
@@ -757,3 +849,30 @@ def test_run_daily_command_reports_failure(
     assert result.exit_code == 1
     assert "Pipeline failed at step risk_evaluate" in result.stdout
     assert "FAILED pipeline" in result.stdout
+
+
+def test_observability_manifest_command(tmp_path: Path) -> None:
+    run_dir = _write_manifest_payload(tmp_path)
+
+    result = runner.invoke(app, ["observability", "manifest", "--run", str(run_dir)])
+
+    assert result.exit_code == 0
+    assert "report_build::report_json" in result.stdout
+
+
+def test_observability_manifest_detects_mismatch(tmp_path: Path) -> None:
+    run_dir = _write_manifest_payload(tmp_path, corrupt=True)
+
+    result = runner.invoke(app, ["observability", "manifest", "--run", str(run_dir)])
+
+    assert result.exit_code == 1
+    assert "Validation mismatches" in result.stdout
+
+
+def test_observability_tail_streams_log(tmp_path: Path) -> None:
+    run_dir = _write_manifest_payload(tmp_path)
+
+    result = runner.invoke(app, ["observability", "tail", "--run", str(run_dir)])
+
+    assert result.exit_code == 0
+    assert "log" in result.stdout

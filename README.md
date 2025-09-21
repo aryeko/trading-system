@@ -63,6 +63,10 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
   orchestrates pull → preprocess → risk → report → notify with structured logging.
 - `poetry run ts run rebalance --config configs/sample-config.yml --holdings data/holdings.json --asof YYYY-MM-DD --force`
   runs the full pipeline including signals/rebalance even when cadence is overriden.
+- `poetry run ts observability manifest --run reports/YYYY-MM-DD`
+  validates artifact hashes, sizes, and row counts while printing a summary table.
+- `poetry run ts observability tail --run reports/YYYY-MM-DD`
+  streams the structured JSON logs captured during the pipeline run.
 - `poetry run ts backtest run --config configs/sample-config.yml --start YYYY-MM-DD --end YYYY-MM-DD --output reports/backtests/demo --label smoke`
   executes the deterministic backtest engine and writes metrics, equity curve, trade log, and optional Plotly HTML chart.
 - `poetry run ts backtest compare --baseline reports/backtests/base --candidate reports/backtests/experiment`

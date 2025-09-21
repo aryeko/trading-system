@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,15 @@ from trading_system.notify import (
     NotificationService,
     NotificationStatus,
     load_report_summary,
+)
+from trading_system.observability.logging import (
+    StructuredJsonFormatter,
+    StructuredLoggerAdapter,
+)
+from trading_system.observability.manifest import (
+    ArtifactSpec,
+    ManifestBuilder,
+    ManifestWriteResult,
 )
 from trading_system.preprocess import Preprocessor, PreprocessResult
 from trading_system.rebalance import RebalanceEngine, RebalanceResult
@@ -43,7 +52,7 @@ class StepOutcome:
     status: str = "completed"
     details: str | None = None
     artifacts: dict[str, str] = field(default_factory=dict)
-    manifest: dict[str, str] = field(default_factory=dict)
+    manifest_entries: tuple[ArtifactSpec, ...] = ()
 
 
 @dataclass(slots=True)
@@ -95,20 +104,19 @@ class _PipelineStepError(RuntimeError):
 
 
 @contextlib.contextmanager
-def pipeline_logging(log_path: Path | None) -> Iterator[logging.Logger]:
+def pipeline_logging(
+    log_path: Path | None, *, context: dict[str, Any] | None = None
+) -> Iterator[logging.LoggerAdapter[logging.Logger]]:
     """Configure structured logging for pipeline execution."""
 
     root_logger = logging.getLogger()
     previous_level = root_logger.level
-    previous_handlers = root_logger.handlers[:]  # copy existing handlers
+    previous_handlers = root_logger.handlers[:]
 
     for handler in previous_handlers:
         root_logger.removeHandler(handler)
 
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = StructuredJsonFormatter()
 
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     stream_handler.setFormatter(formatter)
@@ -123,8 +131,12 @@ def pipeline_logging(log_path: Path | None) -> Iterator[logging.Logger]:
 
     root_logger.setLevel(logging.INFO)
 
+    adapter = StructuredLoggerAdapter(
+        logging.getLogger("trading_system.pipeline"), context or {}
+    )
+
     try:
-        yield logging.getLogger("trading_system.pipeline")
+        yield adapter
     finally:
         root_logger.removeHandler(stream_handler)
         stream_handler.close()
@@ -145,9 +157,11 @@ def run_daily_pipeline(
     as_of: date,
     holdings: HoldingsSnapshot,
     holdings_path: Path,
+    config_path: Path | None,
     dry_run: bool,
     force: bool,
     channels: Iterable[str],
+    log_path: Path | None,
 ) -> PipelineSummary:
     """Execute the daily pipeline (pull → preprocess → risk → report → notify)."""
 
@@ -157,11 +171,14 @@ def run_daily_pipeline(
         as_of=as_of,
         holdings=holdings,
         holdings_path=holdings_path,
+        config_path=config_path,
         dry_run=dry_run,
         force=force,
         channels=tuple(channels),
         include_signals=False,
         include_rebalance=False,
+        pipeline_name="daily",
+        log_path=log_path,
     )
     return runner.run()
 
@@ -173,9 +190,11 @@ def run_rebalance_pipeline(
     as_of: date,
     holdings: HoldingsSnapshot,
     holdings_path: Path,
+    config_path: Path | None,
     dry_run: bool,
     force: bool,
     channels: Iterable[str],
+    log_path: Path | None,
 ) -> PipelineSummary:
     """Execute the rebalance pipeline including signals and proposal generation."""
 
@@ -185,11 +204,14 @@ def run_rebalance_pipeline(
         as_of=as_of,
         holdings=holdings,
         holdings_path=holdings_path,
+        config_path=config_path,
         dry_run=dry_run,
         force=force,
         channels=tuple(channels),
         include_signals=True,
         include_rebalance=True,
+        pipeline_name="rebalance",
+        log_path=log_path,
     )
     return runner.run()
 
@@ -205,11 +227,14 @@ class _PipelineRunner:
         as_of: date,
         holdings: HoldingsSnapshot,
         holdings_path: Path,
+        config_path: Path | None,
         dry_run: bool,
         force: bool,
         channels: tuple[str, ...],
         include_signals: bool,
         include_rebalance: bool,
+        pipeline_name: str,
+        log_path: Path | None,
     ) -> None:
         self._config = config
         self._provider = provider
@@ -217,12 +242,15 @@ class _PipelineRunner:
         self._as_of_str = as_of.strftime("%Y-%m-%d")
         self._holdings = holdings
         self._holdings_path = holdings_path
+        self._config_path = config_path
         self._dry_run = dry_run
         self._force = force
         self._channels = channels if channels else ("all",)
         self._include_signals = include_signals
         self._include_rebalance = include_rebalance
         self._logger = logging.getLogger("trading_system.pipeline")
+        self._pipeline_name = pipeline_name
+        self._log_path = log_path
 
         self._data_meta: DataRunMeta | None = None
         self._preprocess_result: PreprocessResult | None = None
@@ -232,59 +260,116 @@ class _PipelineRunner:
         self._report_result: ReportResult | None = None
         self._notification_statuses: tuple[NotificationStatus, ...] | None = None
 
+        reports_dir = self._config.paths.reports / self._as_of_str
+        self._manifest_builder = ManifestBuilder(
+            pipeline=pipeline_name,
+            as_of=self._as_of,
+            reports_dir=reports_dir,
+            config_path=config_path,
+            holdings_path=holdings_path,
+            log_path=log_path,
+        )
+
     def run(self) -> PipelineSummary:
         steps: list[PipelineStep] = []
-        manifest: dict[str, str] = {}
-        start = time.perf_counter()
+        start_perf = time.perf_counter()
+        run_started_at = datetime.now(UTC)
+        manifest_result: ManifestWriteResult | None = None
+
+        self._logger.info(
+            "pipeline_start",
+            extra={
+                "event": "pipeline_start",
+                "pipeline": self._pipeline_name,
+                "as_of": self._as_of_str,
+            },
+        )
 
         try:
-            self._execute_step("data_pull", steps, manifest, self._step_data_pull)
-            self._execute_step(
-                "data_preprocess", steps, manifest, self._step_preprocess
-            )
+            self._execute_step("data_pull", steps, self._step_data_pull)
+            self._execute_step("data_preprocess", steps, self._step_preprocess)
             if self._include_signals:
-                self._execute_step("signals_build", steps, manifest, self._step_signals)
-            self._execute_step("risk_evaluate", steps, manifest, self._step_risk)
+                self._execute_step("signals_build", steps, self._step_signals)
+            self._execute_step("risk_evaluate", steps, self._step_risk)
             if self._include_rebalance:
-                self._execute_step(
-                    "rebalance_propose", steps, manifest, self._step_rebalance
-                )
-            self._execute_step("report_build", steps, manifest, self._step_report)
-            self._execute_step("notify_send", steps, manifest, self._step_notify)
+                self._execute_step("rebalance_propose", steps, self._step_rebalance)
+            self._execute_step("report_build", steps, self._step_report)
+            self._execute_step("notify_send", steps, self._step_notify)
         except _PipelineStepError as exc:
-            duration = time.perf_counter() - start
+            duration = time.perf_counter() - start_perf
+            completed_at = datetime.now(UTC)
+            self._logger.error(
+                "pipeline_failed",
+                extra={
+                    "event": "pipeline_end",
+                    "pipeline": self._pipeline_name,
+                    "as_of": self._as_of_str,
+                    "status": "failed",
+                    "duration": duration,
+                },
+            )
+            manifest_result = self._manifest_builder.finalize(
+                started_at=run_started_at,
+                completed_at=completed_at,
+                success=False,
+            )
             summary = PipelineSummary(
                 as_of=self._as_of,
                 success=False,
                 duration=duration,
                 steps=steps,
-                manifest=manifest,
+                manifest=manifest_result.summary if manifest_result else {},
             )
             raise PipelineExecutionError(
                 exc.step, str(exc), summary=summary, original=exc.error
             ) from exc.error
 
-        duration = time.perf_counter() - start
+        duration = time.perf_counter() - start_perf
+        completed_at = datetime.now(UTC)
+        self._logger.info(
+            "pipeline_completed",
+            extra={
+                "event": "pipeline_end",
+                "pipeline": self._pipeline_name,
+                "as_of": self._as_of_str,
+                "status": "completed",
+                "duration": duration,
+            },
+        )
+        manifest_result = self._manifest_builder.finalize(
+            started_at=run_started_at,
+            completed_at=completed_at,
+            success=True,
+        )
         return PipelineSummary(
             as_of=self._as_of,
             success=True,
             duration=duration,
             steps=steps,
-            manifest=manifest,
+            manifest=manifest_result.summary,
         )
 
     def _execute_step(
         self,
         name: str,
         steps: list[PipelineStep],
-        manifest: dict[str, str],
         func: Callable[[], StepOutcome],
     ) -> StepOutcome:
+        step_started_at = datetime.now(UTC)
         step_start = time.perf_counter()
+        self._logger.info(
+            "step_start",
+            extra={
+                "event": "step_start",
+                "step": name,
+                "as_of": self._as_of_str,
+            },
+        )
         try:
             outcome = func()
         except Exception as exc:
             duration = time.perf_counter() - step_start
+            completed_at = datetime.now(UTC)
             steps.append(
                 PipelineStep(
                     name=name,
@@ -293,9 +378,29 @@ class _PipelineRunner:
                     details=str(exc),
                 )
             )
+            self._manifest_builder.add_step(
+                name=name,
+                status="failed",
+                started_at=step_started_at,
+                completed_at=completed_at,
+                duration_seconds=duration,
+                details=str(exc),
+                artifacts=(),
+            )
+            self._logger.error(
+                "step_failed",
+                extra={
+                    "event": "step_end",
+                    "step": name,
+                    "status": "failed",
+                    "duration": duration,
+                    "error": str(exc),
+                },
+            )
             raise _PipelineStepError(name, exc) from exc
 
         duration = time.perf_counter() - step_start
+        completed_at = datetime.now(UTC)
         status = outcome.status or "completed"
         steps.append(
             PipelineStep(
@@ -306,7 +411,24 @@ class _PipelineRunner:
                 artifacts=outcome.artifacts,
             )
         )
-        manifest.update(outcome.manifest)
+        self._manifest_builder.add_step(
+            name=name,
+            status=status,
+            started_at=step_started_at,
+            completed_at=completed_at,
+            duration_seconds=duration,
+            details=outcome.details,
+            artifacts=outcome.manifest_entries,
+        )
+        self._logger.info(
+            "step_completed",
+            extra={
+                "event": "step_end",
+                "step": name,
+                "status": status,
+                "duration": duration,
+            },
+        )
         return outcome
 
     # ---- individual steps -------------------------------------------------
@@ -328,7 +450,14 @@ class _PipelineRunner:
         return StepOutcome(
             details=details,
             artifacts={"raw_directory": str(meta.directory)},
-            manifest={"data_raw": str(meta.directory)},
+            manifest_entries=(
+                ArtifactSpec(
+                    key="data_raw",
+                    path=meta.directory,
+                    kind="directory",
+                    description="Raw data pull",
+                ),
+            ),
         )
 
     def _step_preprocess(self) -> StepOutcome:
@@ -346,7 +475,14 @@ class _PipelineRunner:
         return StepOutcome(
             details=f"symbols={len(result.symbols)}",
             artifacts={"curated_directory": str(curated_path)},
-            manifest={"data_curated": str(curated_path)},
+            manifest_entries=(
+                ArtifactSpec(
+                    key="data_curated",
+                    path=curated_path,
+                    kind="directory",
+                    description="Curated datasets",
+                ),
+            ),
         )
 
     def _step_signals(self) -> StepOutcome:
@@ -354,14 +490,25 @@ class _PipelineRunner:
         engine = StrategyEngine(self._config)
         result = engine.build(self._as_of, window=252, dry_run=False)
         self._strategy_result = result
+        manifest_entries: tuple[ArtifactSpec, ...] = ()
+        artifacts: dict[str, str] = {}
         if result.output_path is not None:
-            manifest = {"signals": str(result.output_path)}
-            artifacts = {"signals_parquet": str(result.output_path)}
-        else:
-            manifest = {}
-            artifacts = {}
+            artifacts["signals_parquet"] = str(result.output_path)
+            manifest_entries = (
+                ArtifactSpec(
+                    key="signals",
+                    path=result.output_path,
+                    kind="file",
+                    row_count=len(result.frame),
+                    description="Strategy signals",
+                ),
+            )
         details = f"records={len(result.frame)} entries={result.entry_count} exits={result.exit_count}"
-        return StepOutcome(details=details, artifacts=artifacts, manifest=manifest)
+        return StepOutcome(
+            details=details,
+            artifacts=artifacts,
+            manifest_entries=manifest_entries,
+        )
 
     def _step_risk(self) -> StepOutcome:
         self._logger.info("Evaluating risk rules")
@@ -369,12 +516,24 @@ class _PipelineRunner:
         result = engine.build(self._as_of, self._holdings, dry_run=False)
         self._risk_result = result
         artifacts: dict[str, str] = {}
-        manifest: dict[str, str] = {}
+        manifest_entries: tuple[ArtifactSpec, ...] = ()
         if result.output_path is not None:
             artifacts["risk_alerts"] = str(result.output_path)
-            manifest["risk_alerts"] = str(result.output_path)
+            manifest_entries = (
+                ArtifactSpec(
+                    key="risk_alerts",
+                    path=result.output_path,
+                    kind="file",
+                    description="Risk alert payload",
+                    row_count=len(result.alerts),
+                ),
+            )
         details = f"alerts={len(result.alerts)} market_state={result.market_state}"
-        return StepOutcome(details=details, artifacts=artifacts, manifest=manifest)
+        return StepOutcome(
+            details=details,
+            artifacts=artifacts,
+            manifest_entries=manifest_entries,
+        )
 
     def _step_rebalance(self) -> StepOutcome:
         if self._strategy_result is None:
@@ -392,13 +551,25 @@ class _PipelineRunner:
         self._rebalance_result = result
 
         artifacts: dict[str, str] = {}
-        manifest: dict[str, str] = {}
+        manifest_entries: tuple[ArtifactSpec, ...] = ()
         if result.output_path is not None:
             artifacts["proposal"] = str(result.output_path)
-            manifest["rebalance_proposal"] = str(result.output_path)
+            manifest_entries = (
+                ArtifactSpec(
+                    key="rebalance_proposal",
+                    path=result.output_path,
+                    kind="file",
+                    description="Rebalance proposal",
+                    row_count=len(result.targets) + len(result.orders),
+                ),
+            )
 
         details = f"status={result.status} targets={len(result.targets)} orders={len(result.orders)}"
-        return StepOutcome(details=details, artifacts=artifacts, manifest=manifest)
+        return StepOutcome(
+            details=details,
+            artifacts=artifacts,
+            manifest_entries=manifest_entries,
+        )
 
     def _step_report(self) -> StepOutcome:
         self._logger.info("Rendering daily report")
@@ -437,15 +608,26 @@ class _PipelineRunner:
         self._report_result = result
 
         artifacts: dict[str, str] = {}
-        manifest: dict[str, str] = {}
+        manifest_entries: list[ArtifactSpec] = []
         if result.json_path is not None:
             artifacts["report_json"] = str(result.json_path)
-            manifest["report_json"] = str(result.json_path)
+            manifest_entries.append(
+                ArtifactSpec(
+                    key="report_json",
+                    path=result.json_path,
+                    kind="file",
+                    description="Daily report payload",
+                )
+            )
         if result.html_path is not None:
             artifacts["report_html"] = str(result.html_path)
 
         details = f"orders={len(result.payload.get('actions', {}).get('orders', []))}"
-        return StepOutcome(details=details, artifacts=artifacts, manifest=manifest)
+        return StepOutcome(
+            details=details,
+            artifacts=artifacts,
+            manifest_entries=tuple(manifest_entries),
+        )
 
     def _step_notify(self) -> StepOutcome:
         if self._report_result is None:
