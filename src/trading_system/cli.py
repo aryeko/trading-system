@@ -19,15 +19,18 @@ from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
 from trading_system.preprocess import Preprocessor, PreprocessResult
+from trading_system.risk import RiskEngine, load_holdings
 from trading_system.signals import StrategyEngine
 
 app = typer.Typer(help="Utilities for research, reporting, and operations.")
 config_app = typer.Typer(help="Configuration management commands.")
 data_app = typer.Typer(help="Raw data acquisition commands.")
 signals_app = typer.Typer(help="Strategy signal evaluation commands.")
+risk_app = typer.Typer(help="Risk evaluation commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
+app.add_typer(risk_app, name="risk")
 console = Console()
 
 _DEFAULT_DOCTOR_TOOLS: tuple[str, ...] = (
@@ -484,6 +487,146 @@ def signals_explain(
         for name, value in sorted(evaluation.indicators.items()):
             indicator_table.add_row(name, _format_number(value))
         console.print(indicator_table)
+
+
+@risk_app.command("evaluate")
+def risk_evaluate(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
+        ..., help="As-of date for risk evaluation (YYYY-MM-DD)."
+    ),
+    dry_run: bool = typer.Option(
+        False, help="Evaluate without writing risk_alerts.json."
+    ),
+) -> None:
+    """Run crash/drawdown checks and market filter evaluation."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+
+    try:
+        holdings = load_holdings(holdings_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Failed to load holdings:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = RiskEngine(config)
+
+    try:
+        result = engine.build(as_of_date, holdings, dry_run=dry_run)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Risk evaluation failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[green]Evaluated risk for[/green] {as_of_date} — alerts: {len(result.alerts)}"
+    )
+    console.print(f"Market state: {result.market_state}")
+
+    if result.benchmark:
+        if result.market_filter_pass is None:
+            status = "UNKNOWN"
+        else:
+            status = "PASS" if result.market_filter_pass else "FAIL"
+        console.print(f"Market filter [{result.benchmark}] status: {status}")
+
+    if result.alerts:
+        table = Table("symbol", "type", "value", "threshold")
+        for alert in result.alerts:
+            table.add_row(
+                alert.symbol,
+                alert.alert_type,
+                _format_number(alert.value),
+                _format_number(alert.threshold),
+            )
+        console.print(table)
+    else:
+        console.print("[yellow]No risk alerts triggered.[/yellow]")
+
+    if dry_run:
+        console.print("[yellow]Dry run requested; no files written.[/yellow]")
+    elif result.output_path:
+        console.print(f"Risk alerts written to: {result.output_path}")
+
+
+@risk_app.command("explain")
+def risk_explain(
+    config_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--config",
+        "--config-path",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Config file to load.",
+    ),
+    holdings_path: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--holdings",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        help="Holdings snapshot JSON file.",
+    ),
+    symbol: str = typer.Option(..., help="Ticker symbol to inspect."),
+    as_of: str = typer.Option(..., help="As-of date for evaluation (YYYY-MM-DD)."),
+) -> None:
+    """Explain crash/drawdown evaluation for a holding."""
+
+    config = load_config(config_path)
+    as_of_date = _parse_as_of(as_of)
+
+    try:
+        holdings = load_holdings(holdings_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Failed to load holdings:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = RiskEngine(config)
+
+    try:
+        evaluation = engine.explain(symbol, as_of_date, holdings)
+    except KeyError as exc:
+        console.print(f"[red]Symbol not evaluated:[/] {symbol.upper()}")
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        console.print(f"[red]Unable to explain risk evaluation:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"[bold]{evaluation.symbol}[/bold] on {as_of_date}: "
+        f"crash_triggered={evaluation.crash_triggered} | "
+        f"drawdown_triggered={evaluation.drawdown_triggered}"
+    )
+
+    table = Table("metric", "value")
+    table.add_row("daily_return", _format_number(evaluation.daily_return))
+    table.add_row("crash_threshold", _format_number(evaluation.crash_threshold))
+    table.add_row("drawdown", _format_number(evaluation.drawdown))
+    table.add_row("drawdown_threshold", _format_number(evaluation.drawdown_threshold))
+    table.add_row("close", _format_number(evaluation.close))
+    table.add_row("rolling_peak", _format_number(evaluation.rolling_peak))
+    console.print(table)
 
 
 @config_app.command("inspect")
