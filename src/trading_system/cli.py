@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
+from trading_system.backtest import BacktestEngine
 from trading_system.config import Config, load_config
 from trading_system.data import DataProvider, YahooDataProvider, run_data_pull
 from trading_system.data.storage import DataRunMeta
@@ -47,7 +48,7 @@ rebalance_app = typer.Typer(help="Rebalance proposal commands.")
 report_app = typer.Typer(help="Daily report generation commands.")
 risk_app = typer.Typer(help="Risk evaluation commands.")
 notify_app = typer.Typer(help="Notification delivery commands.")
-backtest_app = typer.Typer(help="Backtesting commands (S-11 placeholder).")
+backtest_app = typer.Typer(help="Backtesting commands.")
 run_app = typer.Typer(help="Pipeline orchestration commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
@@ -286,6 +287,72 @@ def _parse_as_of(value: str) -> date:
     except ValueError as exc:  # pragma: no cover - defensive
         console.print(f"[red]Invalid as-of date:[/] {value}")
         raise typer.Exit(code=1) from exc
+
+
+def _format_metric(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, Real) and not isinstance(value, bool):
+        numeric = float(value)
+        if math.isnan(numeric):
+            return "nan"
+        if math.isinf(numeric):
+            return "∞" if numeric > 0 else "-∞"
+        if abs(numeric) >= 1.0:
+            return f"{numeric:,.2f}"
+        return f"{numeric:.4f}"
+    return str(value)
+
+
+def _render_backtest_metrics(metrics: Mapping[str, Any]) -> None:
+    fields = (
+        "start",
+        "end",
+        "trading_days",
+        "initial_cash",
+        "final_equity",
+        "total_return",
+        "cagr",
+        "volatility",
+        "sharpe",
+        "sortino",
+        "max_drawdown",
+        "hit_rate",
+        "turnover_total",
+        "turnover_average",
+        "rebalance_events",
+        "trades_executed",
+    )
+    table = Table("metric", "value")
+    for field in fields:
+        table.add_row(field, _format_metric(metrics.get(field)))
+    console.print(table)
+
+
+def _load_metrics_payload(path: Path) -> Mapping[str, Any]:
+    target = path
+    if target.is_dir():
+        target = target / "metrics.json"
+    if not target.is_file():
+        console.print(f"[red]Metrics file not found:[/] {target}")
+        raise typer.Exit(code=1)
+    with target.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, Mapping):
+        console.print("[red]Metrics payload must be a mapping.[/red]")
+        raise typer.Exit(code=1)
+    return payload
+
+
+def _metrics_delta(baseline: Any, candidate: Any) -> Any:
+    if (
+        isinstance(baseline, Real)
+        and isinstance(candidate, Real)
+        and not isinstance(baseline, bool)
+        and not isinstance(candidate, bool)
+    ):
+        return candidate - baseline
+    return None
 
 
 @app.command()
@@ -802,20 +869,92 @@ def backtest_run(
     output_dir: Path = typer.Option(  # noqa: B008 - Typer option factory
         ..., "--output", help="Directory to store backtest artifacts"
     ),
+    label: str | None = typer.Option(
+        None,
+        "--label",
+        help="Optional scenario label stored alongside metrics.",
+    ),
     dry_run: bool = _dry_run_flag(
         "Preview configuration without executing the backtest."
     ),
+    no_chart: bool = typer.Option(
+        False,
+        "--no-chart",
+        help="Disable Plotly equity/drawdown HTML output.",
+    ),
 ) -> None:
-    """Placeholder for the deterministic backtest engine (story S-11)."""
+    """Run the deterministic backtest harness."""
 
-    console.print(
-        "[yellow]Backtest engine pending implementation (see story S-11).[/yellow]"
+    config = load_config(config_path)
+    start_date = _parse_as_of(start)
+    end_date = _parse_as_of(end)
+    engine = BacktestEngine(config)
+    include_chart = False if no_chart else None
+
+    result = engine.run(
+        start=start_date,
+        end=end_date,
+        output_dir=output_dir,
+        label=label,
+        dry_run=dry_run,
+        include_chart=include_chart,
     )
+
+    _render_backtest_metrics(result.metrics)
+
+    if dry_run:
+        console.print("[yellow]Dry run complete — no artifacts were written.[/yellow]")
+        return
+
+    if result.manifest:
+        manifest_table = Table("artifact", "location")
+        for key, value in sorted(result.manifest.items()):
+            manifest_table.add_row(key, value)
+        console.print(manifest_table)
+
+    final_equity = _format_metric(result.metrics.get("final_equity"))
+    total_return = _format_metric(result.metrics.get("total_return"))
     console.print(
-        "Requested parameters: "
-        f"config={config_path} start={start} end={end} output={output_dir} dry_run={dry_run}"
+        f"[green]Backtest complete.[/green] Final equity {final_equity}, total return {total_return}."
     )
-    raise typer.Exit(code=1)
+    if result.output_dir is not None:
+        console.print(f"Artifacts available at: {result.output_dir}")
+
+
+@backtest_app.command("compare")
+def backtest_compare(
+    baseline: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--baseline",
+        exists=True,
+        help="Baseline backtest directory or metrics.json",
+    ),
+    candidate: Path = typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--candidate",
+        exists=True,
+        help="Candidate backtest directory or metrics.json",
+    ),
+) -> None:
+    """Compare backtest metric outputs and show deltas."""
+
+    baseline_metrics = _load_metrics_payload(baseline)
+    candidate_metrics = _load_metrics_payload(candidate)
+
+    keys = sorted(set(baseline_metrics) | set(candidate_metrics))
+    table = Table("metric", "baseline", "candidate", "delta")
+    for key in keys:
+        base_value = baseline_metrics.get(key)
+        cand_value = candidate_metrics.get(key)
+        delta_value = _metrics_delta(base_value, cand_value)
+        table.add_row(
+            key,
+            _format_metric(base_value),
+            _format_metric(cand_value),
+            _format_metric(delta_value),
+        )
+
+    console.print(table)
 
 
 @data_app.command("inspect")

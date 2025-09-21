@@ -1,5 +1,6 @@
 """Trading System package."""
 
+from trading_system.backtest import BacktestEngine
 from trading_system.config import Config, load_config
 from trading_system.data import run_data_pull
 from trading_system.rebalance import RebalanceEngine
@@ -9,6 +10,7 @@ from trading_system.signals import StrategyEngine
 
 __all__ = [
     "__version__",
+    "BacktestEngine",
     "Config",
     "load_config",
     "run_data_pull",
