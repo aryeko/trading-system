@@ -49,6 +49,10 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
   emits `risk_alerts.json` summarizing crash/drawdown alerts and market filter state.
 - `poetry run ts risk explain --config configs/sample-config.yml --holdings data/holdings.json --symbol AAPL --as-of YYYY-MM-DD`
   surfaces detailed metrics supporting each alert for the selected holding.
+- `poetry run ts report build --config configs/sample-config.yml --holdings data/holdings.json --as-of YYYY-MM-DD`
+  compiles HTML/JSON daily operator reports (add `--include-pdf` to request PDF output).
+- `poetry run ts report preview --config configs/sample-config.yml --holdings data/holdings.json --as-of YYYY-MM-DD --open`
+  regenerates the report and optionally opens the HTML for manual QA.
 
 ### Handy Automation Commands
 
