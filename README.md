@@ -45,6 +45,10 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
   generates a `signals.parquet` artifact with rule outcomes and rank scores.
 - `poetry run ts signals explain --config configs/sample-config.yml --symbol AAPL --as-of YYYY-MM-DD`
   prints the entry/exit evaluation details and key indicator values for a symbol.
+- `poetry run ts risk evaluate --config configs/sample-config.yml --holdings data/holdings.json --as-of YYYY-MM-DD`
+  emits `risk_alerts.json` summarizing crash/drawdown alerts and market filter state.
+- `poetry run ts risk explain --config configs/sample-config.yml --holdings data/holdings.json --symbol AAPL --as-of YYYY-MM-DD`
+  surfaces detailed metrics supporting each alert for the selected holding.
 
 ### Handy Automation Commands
 
