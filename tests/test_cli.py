@@ -790,6 +790,64 @@ def test_run_daily_command_prints_summary(
     assert "report_json" in result.stdout
 
 
+def test_run_daily_defaults_asof_to_today(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _write_pipeline_config(tmp_path)
+    holdings_path = _write_holdings_file(tmp_path)
+
+    captured: dict[str, object] = {}
+
+    def fake_pipeline_logging(path, context=None):  # noqa: ANN001 - test stub
+        class _Ctx:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        return _Ctx()
+
+    def fake_parse_as_of(value: str | None) -> date:
+        captured["option_value"] = value
+        return date.today() if value is None else date.fromisoformat(value)
+
+    def fake_run_daily_pipeline(**kwargs):
+        captured["parsed_date"] = kwargs["as_of"]
+        return PipelineSummary(
+            as_of=kwargs["as_of"],
+            success=True,
+            duration=0.0,
+            steps=[],
+            manifest={},
+        )
+
+    monkeypatch.setattr("trading_system.cli.pipeline_logging", fake_pipeline_logging)
+    monkeypatch.setattr("trading_system.cli._parse_as_of", fake_parse_as_of)
+    monkeypatch.setattr("trading_system.cli._resolve_provider", lambda name: object())
+    monkeypatch.setattr(
+        "trading_system.cli.run_daily_pipeline", fake_run_daily_pipeline
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "daily",
+            "--config",
+            str(config_path),
+            "--holdings",
+            str(holdings_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    today = date.today().isoformat()
+    assert captured["option_value"] is None
+    assert isinstance(captured["parsed_date"], date)
+    assert captured["parsed_date"].isoformat() == today
+
+
 def test_run_daily_command_reports_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

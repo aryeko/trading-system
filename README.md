@@ -41,6 +41,9 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
 
 ## CLI Highlights
 
+Commands default the as-of option (pass via `--asof`/`--as-of` or `TS_ASOF`) to today's date, so you can omit it for
+"run it now" workflows.
+
 - `poetry run ts signals build --config configs/sample-config.yml --as-of YYYY-MM-DD`
   generates a `signals.parquet` artifact with rule outcomes and rank scores.
 - `poetry run ts signals explain --config configs/sample-config.yml --symbol AAPL --as-of YYYY-MM-DD`

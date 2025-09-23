@@ -148,10 +148,12 @@ def _config_option() -> Any:
 
 def _asof_option(help_text: str) -> Any:
     return typer.Option(  # noqa: B008 - CLI option definition
-        ...,
+        None,
         "--asof",
+        "--as-of",
         help=help_text,
         envvar="TS_ASOF",
+        show_default="today",
     )
 
 
@@ -316,7 +318,9 @@ def _resolve_provider(name: str) -> DataProvider:
     return factory()
 
 
-def _parse_as_of(value: str) -> date:
+def _parse_as_of(value: str | None) -> date:
+    if value is None:
+        return date.today()
     try:
         return date.fromisoformat(value)
     except ValueError as exc:  # pragma: no cover - defensive
@@ -444,9 +448,7 @@ def data_pull(
         readable=True,
         help="Config file to load.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for the pull (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for the pull (YYYY-MM-DD)."),
     provider: str | None = typer.Option(
         None,
         help="Override data provider (defaults to config data.provider).",
@@ -731,9 +733,7 @@ def notify_send(
         readable=True,
         help="Config file to load.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for the notification (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for the notification (YYYY-MM-DD)."),
     channel: str = typer.Option(
         "all",
         "--channel",
@@ -775,9 +775,7 @@ def notify_preview(
         readable=True,
         help="Config file to load.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for the notification (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for the notification (YYYY-MM-DD)."),
     channel: str = typer.Option(
         "all",
         "--channel",
@@ -1153,9 +1151,7 @@ def data_preprocess(
         readable=True,
         help="Config file to load.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for preprocessing (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for preprocessing (YYYY-MM-DD)."),
     dry_run: bool = typer.Option(
         False, help="Validate inputs without writing outputs."
     ),
@@ -1223,9 +1219,7 @@ def signals_build(
         readable=True,
         help="Config file to load.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for signals (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for signals (YYYY-MM-DD)."),
     window: int = typer.Option(252, help="Lookback window in rows for evaluation."),
     dry_run: bool = typer.Option(
         False, help="Evaluate without writing parquet output."
@@ -1291,7 +1285,7 @@ def signals_explain(
         help="Config file to load.",
     ),
     symbol: str = typer.Option(..., help="Ticker symbol to inspect."),
-    as_of: str = typer.Option(..., help="As-of date for evaluation (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for evaluation (YYYY-MM-DD)."),
     window: int = typer.Option(252, help="Lookback window in rows for evaluation."),
 ) -> None:
     """Explain strategy rule evaluations for a symbol."""
@@ -1350,7 +1344,7 @@ def rebalance_propose(
         readable=True,
         help="Holdings snapshot JSON file.",
     ),
-    as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for rebalance (YYYY-MM-DD)."),
     signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--signals",
@@ -1408,7 +1402,7 @@ def rebalance_dry_run(
         readable=True,
         help="Holdings snapshot JSON file.",
     ),
-    as_of: str = typer.Option(..., help="As-of date for rebalance (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for rebalance (YYYY-MM-DD)."),
     signals_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--signals",
@@ -1469,7 +1463,7 @@ def report_build(
         readable=True,
         help="Holdings snapshot JSON file.",
     ),
-    as_of: str = typer.Option(..., help="As-of date for report (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for report (YYYY-MM-DD)."),
     risk_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--risk",
@@ -1551,7 +1545,7 @@ def report_preview(
         readable=True,
         help="Holdings snapshot JSON file.",
     ),
-    as_of: str = typer.Option(..., help="As-of date for report (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for report (YYYY-MM-DD)."),
     risk_path: Path | None = typer.Option(  # noqa: B008 - CLI option definition
         None,
         "--risk",
@@ -1636,9 +1630,7 @@ def risk_evaluate(
         readable=True,
         help="Holdings snapshot JSON file.",
     ),
-    as_of: str = typer.Option(  # noqa: B008 - CLI option definition
-        ..., help="As-of date for risk evaluation (YYYY-MM-DD)."
-    ),
+    as_of: str = _asof_option("As-of date for risk evaluation (YYYY-MM-DD)."),
     dry_run: bool = typer.Option(
         False, help="Evaluate without writing risk_alerts.json."
     ),
@@ -1715,7 +1707,7 @@ def risk_explain(
         help="Holdings snapshot JSON file.",
     ),
     symbol: str = typer.Option(..., help="Ticker symbol to inspect."),
-    as_of: str = typer.Option(..., help="As-of date for evaluation (YYYY-MM-DD)."),
+    as_of: str = _asof_option("As-of date for evaluation (YYYY-MM-DD)."),
 ) -> None:
     """Explain crash/drawdown evaluation for a holding."""
 
