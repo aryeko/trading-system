@@ -57,6 +57,11 @@ Track ongoing initiatives on the [GitHub Project board](https://github.com/users
 ## Contributing
 We welcome collaboration! Please review [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
+## Disclaimer
+
+This project is for **educational use only** and does not provide financial advice.  
+See [DISCLAIMER.md](DISCLAIMER.md) for full details.
+
 ## License
 Released under the [MIT License](LICENSE).
 
