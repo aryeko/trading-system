@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """High-level orchestration for raw data pulls."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Portfolio rebalancer converting signals into target weights and orders."""
 
 from __future__ import annotations

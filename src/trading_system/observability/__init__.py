@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Observability utilities (structured logging and manifests)."""
 
 from .logging import StructuredJsonFormatter, StructuredLoggerAdapter

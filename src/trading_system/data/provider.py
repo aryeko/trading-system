@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Interfaces and helpers for raw market data providers."""
 
 from __future__ import annotations

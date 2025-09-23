@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Reusable expression evaluator for declarative trading rules."""
 
 from __future__ import annotations

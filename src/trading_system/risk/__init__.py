@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Risk engine for crash/drawdown alerts and market filter evaluation."""
 
 from __future__ import annotations

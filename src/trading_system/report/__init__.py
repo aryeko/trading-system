@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Report builder producing daily operator artifacts."""
 
 from __future__ import annotations

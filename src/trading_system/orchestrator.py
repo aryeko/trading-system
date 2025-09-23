@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Pipeline orchestration utilities for the trading-system CLI."""
 
 from __future__ import annotations

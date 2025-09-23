@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Structured logging utilities for trading-system pipelines."""
 
 from __future__ import annotations
