@@ -37,3 +37,8 @@ Thank you for your interest in improving Trading System! This guide walks you th
 
 ## License Note
 By contributing to Trading System, you agree that your contributions will be licensed under the terms of the MIT License.
+
+### Disclaimer for Contributors
+
+By contributing, you acknowledge that this project is for educational purposes only  
+and that neither you nor the maintainers are providing financial advice.
