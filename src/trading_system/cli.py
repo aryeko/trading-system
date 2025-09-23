@@ -27,6 +27,11 @@ from trading_system.notify import (
     NotificationStatus,
     load_report_summary,
 )
+from trading_system.observability.manifest import (
+    PipelineManifest,
+    load_manifest,
+    validate_manifest,
+)
 from trading_system.orchestrator import (
     PipelineExecutionError,
     PipelineSummary,
@@ -50,6 +55,7 @@ risk_app = typer.Typer(help="Risk evaluation commands.")
 notify_app = typer.Typer(help="Notification delivery commands.")
 backtest_app = typer.Typer(help="Backtesting commands.")
 run_app = typer.Typer(help="Pipeline orchestration commands.")
+observability_app = typer.Typer(help="Observability and auditing commands.")
 app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(signals_app, name="signals")
@@ -59,6 +65,7 @@ app.add_typer(risk_app, name="risk")
 app.add_typer(notify_app, name="notify")
 app.add_typer(backtest_app, name="backtest")
 app.add_typer(run_app, name="run")
+app.add_typer(observability_app, name="observability")
 console = Console()
 
 _DEFAULT_DOCTOR_TOOLS: tuple[str, ...] = (
@@ -179,6 +186,34 @@ def _channel_option(default: str = "all") -> Any:
 
 def _log_toggle() -> Any:
     return typer.Option(True, help="Write pipeline logs to reports/<asof>/run.log.")
+
+
+def _run_directory_option() -> Any:
+    return typer.Option(  # noqa: B008 - CLI option definition
+        ...,
+        "--run",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        help="Pipeline run directory (e.g., reports/2024-05-02).",
+    )
+
+
+def _format_size(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "—"
+
+
+def _format_rows(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "—"
+
+
+def _load_manifest_for_run(run_dir: Path) -> tuple[Path, PipelineManifest]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Manifest file not found in {run_dir}")
+    manifest = load_manifest(manifest_path)
+    return manifest_path, manifest
 
 
 def _resolve_log_path(config: Config, as_of_date: date, enabled: bool) -> Path | None:
@@ -793,16 +828,25 @@ def run_daily(
 
     summary: PipelineSummary | None = None
     try:
-        with pipeline_logging(log_path):
+        with pipeline_logging(
+            log_path,
+            context={
+                "pipeline": "daily",
+                "as_of": as_of_date.isoformat(),
+                "config": str(config_path),
+            },
+        ):
             summary = run_daily_pipeline(
                 config=config,
                 provider=provider,
                 as_of=as_of_date,
                 holdings=holdings,
                 holdings_path=holdings_path,
+                config_path=config_path,
                 dry_run=dry_run,
                 force=force,
                 channels=channels,
+                log_path=log_path,
             )
     except PipelineExecutionError as exc:
         _print_pipeline_summary(exc.summary)
@@ -835,16 +879,25 @@ def run_rebalance(
 
     summary: PipelineSummary | None = None
     try:
-        with pipeline_logging(log_path):
+        with pipeline_logging(
+            log_path,
+            context={
+                "pipeline": "rebalance",
+                "as_of": as_of_date.isoformat(),
+                "config": str(config_path),
+            },
+        ):
             summary = run_rebalance_pipeline(
                 config=config,
                 provider=provider,
                 as_of=as_of_date,
                 holdings=holdings,
                 holdings_path=holdings_path,
+                config_path=config_path,
                 dry_run=dry_run,
                 force=force,
                 channels=channels,
+                log_path=log_path,
             )
     except PipelineExecutionError as exc:
         _print_pipeline_summary(exc.summary)
@@ -852,6 +905,85 @@ def run_rebalance(
         raise typer.Exit(code=1) from exc
 
     _print_pipeline_summary(summary)
+
+
+@observability_app.command("manifest")
+def observability_manifest(
+    run_dir: Path = _run_directory_option(),  # noqa: B008 - Typer option factory
+) -> None:
+    """Display and validate the manifest for a completed run."""
+
+    try:
+        manifest_path, manifest = _load_manifest_for_run(run_dir)
+    except FileNotFoundError as exc:  # pragma: no cover - defensive
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Manifest file: [bold]{manifest_path}[/bold]")
+    console.print(
+        f"Pipeline: [green]{manifest.run.pipeline}[/green] as_of={manifest.run.as_of}"
+    )
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("artifact", overflow="fold", no_wrap=True)
+    table.add_column("kind")
+    table.add_column("size (bytes)", justify="right")
+    table.add_column("rows", justify="right")
+    table.add_column("sha256", overflow="ellipsis", max_width=20)
+    for artifact in manifest.run.artifacts:
+        table.add_row(
+            f"run::{artifact.key}",
+            artifact.kind,
+            _format_size(artifact.size_bytes),
+            _format_rows(artifact.row_count),
+            artifact.sha256 or "—",
+        )
+    for step in manifest.steps:
+        for artifact in step.artifacts:
+            table.add_row(
+                f"{step.name}::{artifact.key}",
+                artifact.kind,
+                _format_size(artifact.size_bytes),
+                _format_rows(artifact.row_count),
+                artifact.sha256 or "—",
+            )
+
+    console.print(table)
+
+    errors = validate_manifest(manifest)
+    if errors:
+        console.print("[red]Validation mismatches detected:[/red]")
+        for item in errors:
+            console.print(f" - {item}")
+        raise typer.Exit(code=1)
+
+
+@observability_app.command("tail")
+def observability_tail(
+    run_dir: Path = _run_directory_option(),  # noqa: B008 - Typer option factory
+) -> None:
+    """Stream structured logs for a pipeline run."""
+
+    try:
+        _, manifest = _load_manifest_for_run(run_dir)
+    except FileNotFoundError as exc:  # pragma: no cover - defensive
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    log_path_raw = manifest.run.log_path
+    if not log_path_raw:
+        console.print("[yellow]Manifest does not reference a log file.[/yellow]")
+        raise typer.Exit(code=1)
+
+    log_path = Path(log_path_raw)
+    if not log_path.is_file():
+        console.print(f"[red]Log file not found: {log_path}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Streaming log: [bold]{log_path}[/bold]")
+    with log_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            typer.echo(line.rstrip())
 
 
 @backtest_app.command("run")

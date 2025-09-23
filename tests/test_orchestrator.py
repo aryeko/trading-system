@@ -311,14 +311,18 @@ def test_run_daily_pipeline_success(
         as_of=date(2024, 5, 2),
         holdings=holdings,
         holdings_path=holdings_path,
+        config_path=config_path,
         dry_run=True,
         force=False,
         channels=["email"],
+        log_path=None,
     )
 
     assert isinstance(summary, PipelineSummary)
     assert summary.success is True
     assert "report_json" in summary.manifest
+    manifest_path = Path(summary.manifest["manifest_json"])
+    assert manifest_path.is_file()
     assert any(step.name == "notify_send" for step in summary.steps)
 
 
@@ -338,9 +342,11 @@ def test_run_rebalance_pipeline_generates_proposal(
         as_of=date(2024, 5, 3),
         holdings=holdings,
         holdings_path=holdings_path,
+        config_path=config_path,
         dry_run=False,
         force=True,
         channels=["all"],
+        log_path=None,
     )
 
     assert summary.success is True
@@ -375,9 +381,11 @@ def test_pipeline_failure_propagates_step(
             as_of=date(2024, 5, 4),
             holdings=holdings,
             holdings_path=holdings_path,
+            config_path=config_path,
             dry_run=False,
             force=False,
             channels=["email"],
+            log_path=None,
         )
 
     error = excinfo.value
