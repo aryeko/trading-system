@@ -1,5 +1,7 @@
 # Trading System
 
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Research and alerting toolkit for a mid/long-horizon discretionary trading workflow. The
 project follows the process and requirements described in [`docs/WORKFLOW.md`](docs/WORKFLOW.md)
 and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
@@ -22,7 +24,7 @@ and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
 
 ## Getting Started
 
-1. Install dependencies using Poetry (Python 3.11+ required):
+1. Install dependencies using Poetry (Python 3.13+ required):
    ```bash
    poetry install
    ```
@@ -106,3 +108,7 @@ Email delivery expects the following environment variables:
 
 Slack notifications require `config.notify.slack_webhook` to point at an incoming webhook URL. Run
 `poetry run ts notify send --dry-run ...` during setup to validate formatting without hitting external services.
+
+## License
+
+Released under the MIT License. See [LICENSE](./LICENSE) for details.

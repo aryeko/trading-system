@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Data acquisition interfaces and utilities."""
 
 from trading_system.data.provider import (

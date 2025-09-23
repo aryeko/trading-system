@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Trading System package."""
 
 from trading_system.backtest import BacktestEngine

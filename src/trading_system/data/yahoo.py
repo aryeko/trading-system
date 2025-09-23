@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Arye Kogan
+# SPDX-License-Identifier: MIT
+
 """Yahoo Finance adapter implementing :class:`DataProvider`."""
 
 from __future__ import annotations
