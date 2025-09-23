@@ -924,7 +924,12 @@ def observability_manifest(
         f"Pipeline: [green]{manifest.run.pipeline}[/green] as_of={manifest.run.as_of}"
     )
 
-    table = Table("artifact", "kind", "size (bytes)", "rows", "sha256")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("artifact", overflow="fold", no_wrap=True)
+    table.add_column("kind")
+    table.add_column("size (bytes)", justify="right")
+    table.add_column("rows", justify="right")
+    table.add_column("sha256", overflow="ellipsis", max_width=20)
     for artifact in manifest.run.artifacts:
         table.add_row(
             f"run::{artifact.key}",
