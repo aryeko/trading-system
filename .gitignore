@@ -11,19 +11,10 @@ htmlcov/
 
 # Data directories
 data/*
-!data/.gitkeep
-!data/sample.yaml
 !data/sample-holdings.json
-!data/raw/
-!data/curated/
-data/raw/*
-!data/raw/.gitkeep
-data/curated/*
-!data/curated/.gitkeep
 
 # Reports directory
-reports/*
-!reports/.gitkeep
+reports/
 
 # VSCode
 .vscode/

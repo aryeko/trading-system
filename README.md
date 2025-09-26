@@ -25,22 +25,22 @@ git clone https://github.com/aryeko/trading-system
 cd trading-system
 poetry install
 
-poetry run ts run daily --config data/sample.yaml --holdings data/sample-holdings.json --dry-run
+poetry run ts run daily --config configs/sample-config.yml --holdings data/sample-holdings.json --dry-run
 ```
 
-Sample onboarding assets live under `data/`. Update the universe, holdings snapshot, and notification settings before running against live capital.
+Sample onboarding assets live under `configs/` (configuration) and `data/` (sample holdings). Update the universe, holdings snapshot, and notification settings before running against live capital.
 
 ## Usage Examples
 
 ```bash
 # Evaluate portfolio risk with point-in-time context
-poetry run ts risk evaluate --config data/sample.yaml --holdings data/sample-holdings.json
+poetry run ts risk evaluate --config configs/sample-config.yml --holdings data/sample-holdings.json
 
 # Execute the full daily pipeline with rebalance proposals
-poetry run ts run rebalance --config data/sample.yaml --holdings data/sample-holdings.json --dry-run
+poetry run ts run rebalance --config configs/sample-config.yml --holdings data/sample-holdings.json --dry-run
 
 # Run a historical backtest across a custom period
-poetry run ts backtest run --config data/sample.yaml --start 2024-01-01 --end 2024-06-30 --output reports/backtests/demo
+poetry run ts backtest run --config configs/sample-config.yml --start 2024-01-01 --end 2024-06-30 --output reports/backtests/demo
 ```
 
 ## Documentation
