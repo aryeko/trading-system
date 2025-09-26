@@ -12,6 +12,8 @@ htmlcov/
 # Data directories
 data/*
 !data/.gitkeep
+!data/sample.yaml
+!data/sample-holdings.json
 !data/raw/
 !data/curated/
 data/raw/*
