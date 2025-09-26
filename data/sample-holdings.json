@@ -1,0 +1,8 @@
+{
+  "as_of_date": "2024-09-23",
+  "base_ccy": "USD",
+  "cash": 10000,
+  "positions": [
+    { "symbol": "SPY", "qty": 50, "cost_basis": 420.0 }
+  ]
+}

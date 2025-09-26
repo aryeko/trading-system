@@ -25,24 +25,26 @@ git clone https://github.com/aryeko/trading-system
 cd trading-system
 poetry install
 
-poetry run ts run daily --config data/sample.yaml
+poetry run ts run daily --config configs/sample-config.yml --holdings data/sample-holdings.json --dry-run
 ```
+
+Sample onboarding assets live under `configs/` (configuration) and `data/` (sample holdings). Update the universe, holdings snapshot, and notification settings before running against live capital.
 
 ## Usage Examples
 
 ```bash
 # Evaluate portfolio risk with point-in-time context
-poetry run ts risk evaluate --config data/sample.yaml --holdings data/holdings.json
+poetry run ts risk evaluate --config configs/sample-config.yml --holdings data/sample-holdings.json
 
 # Execute the full daily pipeline with rebalance proposals
-poetry run ts run rebalance --config data/sample.yaml --holdings data/holdings.json
+poetry run ts run rebalance --config configs/sample-config.yml --holdings data/sample-holdings.json --dry-run
 
 # Run a historical backtest across a custom period
-poetry run ts backtest run --config data/sample.yaml --start 2024-01-01 --end 2024-06-30 --output reports/backtests/demo
+poetry run ts backtest run --config configs/sample-config.yml --start 2024-01-01 --end 2024-06-30 --output reports/backtests/demo
 ```
 
 ## Documentation
-Comprehensive setup guides, operational workflows, and configuration references live in the [Wiki](https://github.com/aryeko/trading-system/wiki).
+Comprehensive setup guides, operational workflows, and configuration references live in the [Wiki](https://github.com/aryeko/trading-system/wiki). For the original workflow contract and design requirements, see [`docs/WORKFLOW.md`](docs/WORKFLOW.md) and [`docs/TECH_DESIGN_REQUIREMENTS.md`](docs/TECH_DESIGN_REQUIREMENTS.md).
 
 ## Roadmap
 - ✅ Daily capital protection checks
